@@ -1,0 +1,18 @@
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build and dependencies
+node_modules/
+dist/
+build/
+
