@@ -1,39 +1,28 @@
 # Shuup - Progress Memory & State Log
 
 ## Current Status
-- **Current Phase:** Phase 1 complete; planning Phase 2 (WebRTC Signaling Baseline)
-- **Active Step:** Awaiting user confirmation to commit Phase 1 and approve Phase 2 implementation plan
-- **Next Step:** Phase 2 implementation (bare 2-socket signaling, caller/callee role assignment, STUN peer connection, local/remote video streams)
+- **Current Phase:** Phase 2 complete; planning Phase 3 (In-Memory Queue & Private Rooms)
+- **Active Step:** Awaiting user confirmation to commit Phase 2 and approve Phase 3 plan
+- **Next Step:** Phase 3 implementation (matchmaker.js, private session rooms, Start button, multi-pair concurrency)
+
+---
+
+## Phase 2 Completed
+- **WebRTC Signaling:** Direct P2P audio/video connection established between two tabs using bare Socket.IO signaling.
+- **Media Handling:** `getUserMedia` invoked first with explicit error classification (`NotAllowedError`, `NotFoundError`, `NotReadableError`).
+- **Connection Hygiene:** StrictMode unmount double-mounting guard (`cancelled` flag); candidate buffering queue to eliminate WebRTC SDP/ICE race conditions; local self-preview muted to prevent acoustic feedback.
+- **Backend Guardrails:** Memory limits enforced (64 KB SDP, 8 KB ICE candidates); partner isolation for relayed signals; automatic room reset retaining surviving peer.
 
 ---
 
 ## Phase 1 Completed
-- **Git Repo:** Initialized strictly within `/Users/kiransinha/Desktop/Shuup` (no commits made yet, pending user confirmation).
-- **Environment & Security:** Root, frontend, and backend `.gitignore` rules active; `.env` excluded, `.env.example` tracked.
-- **Backend (`backend/`):** Plain Node.js `http` + Socket.IO (ESM) running on port 4000. Verified GET `/health` and Socket.IO `"hello"` -> `"hello-reply"`.
-- **Frontend (`frontend/`):** Vite + React (plain JS) running on port 3000. Verified live socket connection and unmount cleanup in `App.jsx`.
-- **Security Audit:** `npm audit` returned 0 vulnerabilities across both projects.
+- **Commit:** `7dccd36` ("Phase 1: project setup, docs and connection baseline")
+- **Clean State:** Verified no `.env` or `node_modules` committed.
 
 ---
 
 ## Files in Progress / Created
-- `.gitignore` - Root repository ignore file.
-- `docs/*` - Central design, architecture, requirements, and tech stack guidelines.
-- `backend/`
-  - `.gitignore`
-  - `.env.example`
-  - `.env`
-  - `package.json`
-  - `package-lock.json`
-  - `src/server.js`
-- `frontend/`
-  - `.gitignore`
-  - `.env.example`
-  - `.env`
-  - `package.json`
-  - `package-lock.json`
-  - `vite.config.js`
-  - `index.html`
-  - `src/main.jsx`
-  - `src/App.jsx`
-- `memory.md` - This progress tracker.
+- `backend/src/server.js` (ready to commit)
+- `frontend/src/webrtc.js` (ready to commit)
+- `frontend/src/App.jsx` (ready to commit)
+- `memory.md` (updated)
