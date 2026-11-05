@@ -1,13 +1,10 @@
 import http from "node:http";
-import crypto from "node:crypto";
 import { Server } from "socket.io";
+import { createMatchmaker } from "./matchmaker.js";
+import { setupSignaling } from "./signaling.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
-
-// Sensible payload size limits to protect server memory
-const MAX_SDP_BYTES = 64 * 1024; // 64 KB
-const MAX_CANDIDATE_BYTES = 8 * 1024; // 8 KB
 
 const server = http.createServer((req, res) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -31,137 +28,79 @@ const io = new Server(server, {
   }
 });
 
-// Phase 2 bare room state: at most 2 peers in the test room
-const activeRoom = {
-  peers: [], // [callerId, calleeId]
-  sessionId: null
-};
-
-function getPartnerId(socketId) {
-  if (activeRoom.peers.length === 2) {
-    if (activeRoom.peers[0] === socketId) return activeRoom.peers[1];
-    if (activeRoom.peers[1] === socketId) return activeRoom.peers[0];
-  }
-  return null;
-}
-
-function getPayloadSize(obj) {
-  try {
-    return Buffer.byteLength(JSON.stringify(obj), "utf8");
-  } catch {
-    return Infinity;
-  }
-}
+const matchmaker = createMatchmaker();
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
 
-  // Reject connections beyond the 2-peer test room limit
-  if (activeRoom.peers.length >= 2) {
-    console.log(`[Socket] Rejected ${socket.id}: room is full`);
-    socket.emit("room-full", { message: "Test room is full (maximum 2 participants)." });
-    socket.disconnect(true);
-    return;
-  }
+  // User enters matchmaking queue
+  socket.on("join-queue", () => {
+    const isSocketConnected = (id) => Boolean(io.sockets.sockets.get(id)?.connected);
+    const result = matchmaker.enqueueUser(socket.id, isSocketConnected);
 
-  activeRoom.peers.push(socket.id);
-
-  if (activeRoom.peers.length === 1) {
-    console.log(`[Room] ${socket.id} joined as first peer (caller). Waiting for partner.`);
-    socket.emit("queue-status", {
-      status: "waiting",
-      message: "Connected. Waiting for a partner to join..."
-    });
-  } else if (activeRoom.peers.length === 2) {
-    const callerId = activeRoom.peers[0];
-    const calleeId = activeRoom.peers[1];
-    activeRoom.sessionId = crypto.randomUUID();
-
-    console.log(`[Room] Paired ${callerId} (caller) and ${calleeId} (callee). Session: ${activeRoom.sessionId}`);
-
-    io.to(callerId).emit("matched", {
-      sessionId: activeRoom.sessionId,
-      isCaller: true
-    });
-
-    io.to(calleeId).emit("matched", {
-      sessionId: activeRoom.sessionId,
-      isCaller: false
-    });
-  }
-
-  // WebRTC Signaling: Offer
-  socket.on("offer", (payload) => {
-    const partnerId = getPartnerId(socket.id);
-    if (!partnerId) return;
-
-    if (
-      getPayloadSize(payload) > MAX_SDP_BYTES ||
-      !payload?.sdp ||
-      payload.sdp.type !== "offer" ||
-      typeof payload.sdp.sdp !== "string"
-    ) {
-      console.warn(`[Signaling] Dropped malformed or oversized offer from ${socket.id}`);
+    if (result.status === "already_queued_or_in_session") {
+      console.log(`[Matchmaker] Ignored duplicate join-queue from ${socket.id}`);
       return;
     }
 
-    io.to(partnerId).emit("offer", payload);
-  });
-
-  // WebRTC Signaling: Answer
-  socket.on("answer", (payload) => {
-    const partnerId = getPartnerId(socket.id);
-    if (!partnerId) return;
-
-    if (
-      getPayloadSize(payload) > MAX_SDP_BYTES ||
-      !payload?.sdp ||
-      payload.sdp.type !== "answer" ||
-      typeof payload.sdp.sdp !== "string"
-    ) {
-      console.warn(`[Signaling] Dropped malformed or oversized answer from ${socket.id}`);
+    if (result.status === "waiting") {
+      console.log(`[Matchmaker] User ${socket.id} entered waiting queue`);
+      socket.emit("queue-status", {
+        status: "waiting",
+        message: "Waiting for a partner..."
+      });
       return;
     }
 
-    io.to(partnerId).emit("answer", payload);
-  });
+    if (result.status === "matched") {
+      const { sessionId, callerId, calleeId } = result;
+      console.log(`[Matchmaker] Paired ${callerId} (caller) and ${calleeId} (callee). Session: ${sessionId}`);
 
-  // WebRTC Signaling: ICE Candidate
-  socket.on("ice-candidate", (payload) => {
-    const partnerId = getPartnerId(socket.id);
-    if (!partnerId) return;
+      const callerSocket = io.sockets.sockets.get(callerId);
+      const calleeSocket = io.sockets.sockets.get(calleeId);
 
-    if (
-      getPayloadSize(payload) > MAX_CANDIDATE_BYTES ||
-      !payload?.candidate ||
-      typeof payload.candidate !== "object"
-    ) {
-      console.warn(`[Signaling] Dropped malformed or oversized ICE candidate from ${socket.id}`);
-      return;
+      // Join named private session room (for room telemetry/scoping only; signaling routes via partner lookup)
+      if (callerSocket) {
+        callerSocket.join(`session:${sessionId}`);
+        callerSocket.emit("matched", { sessionId, isCaller: true });
+      }
+
+      if (calleeSocket) {
+        calleeSocket.join(`session:${sessionId}`);
+        calleeSocket.emit("matched", { sessionId, isCaller: false });
+      }
     }
-
-    io.to(partnerId).emit("ice-candidate", payload);
   });
 
-  // Handle Disconnect
+  // User intentionally leaves queue or call
+  socket.on("leave-session", () => {
+    console.log(`[Socket] ${socket.id} requested leave-session`);
+    const result = matchmaker.leaveSession(socket.id);
+
+    if (result.wasInSession) {
+      socket.leave(`session:${result.sessionId}`);
+      const partnerSocket = io.sockets.sockets.get(result.partnerId);
+      if (partnerSocket) {
+        partnerSocket.leave(`session:${result.sessionId}`);
+        partnerSocket.emit("partner-left", { reason: "left" });
+      }
+    }
+  });
+
+  // Attach WebRTC signaling router
+  setupSignaling(io, socket, matchmaker);
+
+  // Handle client disconnect
   socket.on("disconnect", (reason) => {
     console.log(`[Socket] Disconnected: ${socket.id} (${reason})`);
+    const result = matchmaker.leaveSession(socket.id);
 
-    const index = activeRoom.peers.indexOf(socket.id);
-    if (index === -1) return;
-
-    activeRoom.peers.splice(index, 1);
-    activeRoom.sessionId = null;
-
-    // If a partner survived, keep them as the first peer in the room and notify them
-    if (activeRoom.peers.length === 1) {
-      const survivingPeerId = activeRoom.peers[0];
-      console.log(`[Room] Surviving peer: ${survivingPeerId}. Waiting for new partner.`);
-      io.to(survivingPeerId).emit("partner-left", { reason: "disconnected" });
-      io.to(survivingPeerId).emit("queue-status", {
-        status: "waiting",
-        message: "Partner disconnected. Waiting for a new partner to join..."
-      });
+    if (result.wasInSession) {
+      const partnerSocket = io.sockets.sockets.get(result.partnerId);
+      if (partnerSocket) {
+        partnerSocket.leave(`session:${result.sessionId}`);
+        partnerSocket.emit("partner-left", { reason: "disconnected" });
+      }
     }
   });
 });
