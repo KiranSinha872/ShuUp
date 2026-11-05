@@ -8,11 +8,12 @@ This document establishes the technical constraints, coding standards, and secur
 
 | Component | Technology | Rationale |
 |---|---|---|
-| Frontend Framework | Vite + React (Plain JS) | Ultra-fast startup, static build output, zero SSR hydration pitfalls with WebRTC. |
-| Backend Server | Plain Node.js `http` | Minimal footprint; no Express overhead needed for a Socket.IO signaling server. |
+| Frontend Framework | Vite + React (Plain JS) | Ultra-fast startup, static build output, zero SSR hydration pitfalls with WebRTC. Runs on port 3000. |
+| Backend Server | Plain Node.js `http` | Minimal footprint; no Express overhead needed for a Socket.IO signaling server. Runs on port 4000. |
 | Realtime Engine | Socket.IO | Battle-tested WebSocket fallback, connection heartbeats, and room management. |
 | Media Transport | Browser-native WebRTC | Direct P2P video/audio; zero third-party video SDK dependencies. |
 | Health Check | Plain Node `http.createServer` | Simple GET `/health` returning `{ status: "ok" }`. |
+| Test Runner | Node.js built-in `node --test` | Zero external testing dependencies. Executed via `npm test` (`"test": "node --test"` in `backend/package.json`). |
 | Persistence (Phase 8) | Supabase | Auth with MFA, anonymous session analytics, and invite code management. |
 
 ---
@@ -22,7 +23,7 @@ This document establishes the technical constraints, coding standards, and secur
 ### Phase 1–3 (Setup, Signaling, & Basic Queue)
 - **Zero Secrets in Version Control:** All secrets reside strictly in `.env` files. Both `frontend/.gitignore` and `backend/.gitignore` must block `.env` and `.env.*`.
 - **Frontend Environment Safety:** Frontend `.env` contains only public values prefixed with `VITE_` (e.g. `VITE_BACKEND_URL`). Never expose backend keys or admin tokens.
-- **Strict CORS Policy:** Backend Socket.IO and HTTP endpoints permit connections **only** from the explicitly configured frontend origin (e.g., `http://localhost:5173` in development). Wildcard `*` is strictly forbidden.
+- **Strict CORS Policy:** Backend Socket.IO and HTTP endpoints permit connections **only** from the explicitly configured frontend origin (`http://localhost:3000` in development). Wildcard `*` is strictly forbidden.
 - **Baseline HTTP Security Headers:** For the Node HTTP server (including `/health`), set explicit security headers on responses:
   - `X-Content-Type-Options: nosniff`
   - `X-Frame-Options: DENY`
@@ -30,7 +31,7 @@ This document establishes the technical constraints, coding standards, and secur
   - `Content-Security-Policy: default-src 'self'` (with required WebSocket origins)
 
 ### Phase 4–6 (Preferences, Lifecycle, & Connectivity)
-- **Server-Side Validation:** The backend must strictly validate every incoming socket event payload. Never trust partner IDs or data types sent from clients.
+- **Server-Side Validation:** The backend must strictly validate every incoming socket event payload with pure validation functions (e.g. `validateJoinPayload`). Never trust partner IDs or data types sent from clients.
 - **Signaling Partner Isolation:** The server stores partner pairings internally. Offer, answer, and ICE candidates are dispatched solely to the paired partner socket verified in memory.
 - **Ghost Socket Cleanup:** Active heartbeat monitoring and disconnect hooks immediately purge stale sockets from the matchmaking queue and notify active partners.
 
@@ -46,7 +47,7 @@ This document establishes the technical constraints, coding standards, and secur
 
 ---
 
-## 3. Database Indexing, Caching, & Load Testing Scope
+## 3. Database Indexing, Caching, & Testing Scope
 
 ### Database Indexing (Phase 8 Supabase)
 - **Needed:**
@@ -62,9 +63,8 @@ This document establishes the technical constraints, coding standards, and secur
 - **Not Needed:**
   - Redis or distributed cache: Unnecessary overhead for the single-instance prototype. Server memory is completely adequate.
 
-### Load Testing
-- **Needed:**
+### Testing Strategy
+- **Unit Tests (`node --test`):** Isolated tests for pure matching logic (`isCompatible`), payload validation (`validateJoinPayload`), and simulated multi-user arrival queues without network overhead.
+- **Load Testing:**
   - Multi-tab manual verification (testing 4–6 concurrent browser sessions locally) across different identity/preference combinations.
-- **Not Needed:**
   - Automated synthetic load testing tools (e.g. k6, Artillery) are out of scope for the prototype and will not be configured unless requested.
-

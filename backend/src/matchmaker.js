@@ -1,65 +1,85 @@
 import crypto from "node:crypto";
+import { isCompatible } from "./compatibility.js";
 
-export function createMatchmaker() {
-  const waitingQueue = []; // array of socket IDs
+export function createMatchmaker(options = {}) {
+  const matchWithAnyone = Boolean(options.matchWithAnyone);
+  const waitingQueue = []; // array of { socketId, identity, preferences, joinedAt }
   const activeSessions = new Map(); // sessionId -> { callerId, calleeId, createdAt }
   const userSessions = new Map(); // socketId -> { sessionId, partnerId }
 
   function isQueued(socketId) {
-    return waitingQueue.includes(socketId);
+    return waitingQueue.some((item) => item.socketId === socketId);
   }
 
   function isInSession(socketId) {
     return userSessions.has(socketId);
   }
 
-  function enqueueUser(socketId, isSocketConnected) {
-    // Discard duplicates and users currently in an active call
+  function enqueueUser(user, isSocketConnected = () => true) {
+    const { socketId, identity, preferences } = user;
+
+    // Discard duplicates or users already in an active session
     if (isQueued(socketId) || isInSession(socketId)) {
       return { status: "already_queued_or_in_session" };
     }
 
-    // Inspect waiting queue; purge any disconnected sockets encountered
-    while (waitingQueue.length > 0) {
-      const candidateId = waitingQueue.shift();
+    // Scan waiting queue in arrival order (longest-waiter-first)
+    let candidateIndex = 0;
+    while (candidateIndex < waitingQueue.length) {
+      const candidate = waitingQueue[candidateIndex];
 
-      if (isSocketConnected && isSocketConnected(candidateId)) {
-        // Synchronous atomic pairing block (no awaits)
+      // Discard stale or disconnected sockets
+      if (!isSocketConnected(candidate.socketId)) {
+        waitingQueue.splice(candidateIndex, 1);
+        continue;
+      }
+
+      // Check compatibility
+      const compatible = matchWithAnyone || isCompatible(candidate, user);
+
+      if (compatible) {
+        // Synchronous atomic match-and-remove block (no awaits)
+        waitingQueue.splice(candidateIndex, 1);
         const sessionId = crypto.randomUUID();
 
         activeSessions.set(sessionId, {
-          callerId: candidateId,
+          callerId: candidate.socketId,
           calleeId: socketId,
           createdAt: Date.now()
         });
 
-        userSessions.set(candidateId, { sessionId, partnerId: socketId });
-        userSessions.set(socketId, { sessionId, partnerId: candidateId });
+        userSessions.set(candidate.socketId, { sessionId, partnerId: socketId });
+        userSessions.set(socketId, { sessionId, partnerId: candidate.socketId });
 
         return {
           status: "matched",
           sessionId,
-          callerId: candidateId,
+          callerId: candidate.socketId,
           calleeId: socketId
         };
       }
-      // Candidate was disconnected; dropped from queue
+
+      candidateIndex++;
     }
 
-    // Queue was empty or all candidates were stale; enqueue socket
-    waitingQueue.push(socketId);
+    // No compatible candidate found; append user to waiting queue
+    waitingQueue.push({
+      socketId,
+      identity,
+      preferences,
+      joinedAt: Date.now()
+    });
+
     return { status: "waiting" };
   }
 
   function leaveSession(socketId) {
-    // 1. If user was waiting in the queue, remove them
-    const qIndex = waitingQueue.indexOf(socketId);
+    const qIndex = waitingQueue.findIndex((item) => item.socketId === socketId);
     if (qIndex !== -1) {
       waitingQueue.splice(qIndex, 1);
       return { wasWaiting: true };
     }
 
-    // 2. If user was in an active session, dissolve session
     const sessionInfo = userSessions.get(socketId);
     if (sessionInfo) {
       const { sessionId, partnerId } = sessionInfo;
@@ -80,13 +100,17 @@ export function createMatchmaker() {
     return userSessions.get(socketId)?.partnerId || null;
   }
 
+  function getWaitingQueue() {
+    return waitingQueue.map((item) => ({ ...item }));
+  }
+
   return {
     enqueueUser,
     leaveSession,
     getSessionInfo,
     getPartnerId,
     isQueued,
-    isInSession
+    isInSession,
+    getWaitingQueue
   };
 }
-

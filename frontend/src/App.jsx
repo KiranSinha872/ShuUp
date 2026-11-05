@@ -4,11 +4,20 @@ import { createPeerConnection } from "./webrtc.js";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:4000";
 
+const IDENTITIES = ["Man", "Woman", "Non-binary", "Prefer not to say"];
+const PREFERENCES = ["Men", "Women", "Non-binary people", "Anyone"];
+
 export default function App() {
   const [uiState, setUiState] = useState("idle"); // "idle" | "waiting" | "matched"
+  const [isConnected, setIsConnected] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState("Initializing media...");
   const [errorMessage, setErrorMessage] = useState("");
   const [sessionInfo, setSessionInfo] = useState(null);
+
+  // User matching attributes (defaults per brief)
+  const [identity, setIdentity] = useState("Prefer not to say");
+  const [preferences, setPreferences] = useState(["Anyone"]);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -17,6 +26,12 @@ export default function App() {
   const socketRef = useRef(null);
   const currentSessionIdRef = useRef(null);
   const pendingOfferRef = useRef(null);
+  const queueTimeoutRef = useRef(null);
+  const uiStateRef = useRef("idle");
+
+  useEffect(() => {
+    uiStateRef.current = uiState;
+  }, [uiState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,27 +67,54 @@ export default function App() {
           localVideoRef.current.srcObject = stream;
         }
 
-        setStatus("Camera preview ready. Press Start to join the matchmaking queue.");
+        setStatus("Camera preview ready. Choose your preferences and press Start.");
 
-        // Connect socket strictly after media is successfully granted
         const socket = io(BACKEND_URL);
         socketRef.current = socket;
+        setIsConnected(socket.connected);
 
         socket.on("connect", () => {
-          // Connected and ready in idle state
+          setIsConnected(true);
+          setErrorMessage("");
+          if (uiStateRef.current === "idle") {
+            setStatus("Ready. Choose your preferences and press Start.");
+          }
+        });
+
+        socket.on("connect_error", () => {
+          setIsConnected(false);
+          setErrorMessage("Cannot reach the server. Please check your connection.");
         });
 
         socket.on("queue-status", (data) => {
-          setStatus(data.message);
+          if (queueTimeoutRef.current) {
+            clearTimeout(queueTimeoutRef.current);
+            queueTimeoutRef.current = null;
+          }
+          setIsSubmitting(false);
+
+          if (data.status === "waiting") {
+            setUiState("waiting");
+            setStatus(data.message || "Waiting for a compatible partner...");
+          } else if (data.status === "rejected") {
+            setUiState("idle");
+            setErrorMessage(data.message || "Queue request rejected.");
+            setStatus("Ready. Please check your preferences and press Start.");
+          }
         });
 
         socket.on("matched", async ({ sessionId, isCaller }) => {
+          if (queueTimeoutRef.current) {
+            clearTimeout(queueTimeoutRef.current);
+            queueTimeoutRef.current = null;
+          }
+          setIsSubmitting(false);
+
           currentSessionIdRef.current = sessionId;
           setSessionInfo({ sessionId, role: isCaller ? "Caller" : "Callee" });
           setUiState("matched");
           setStatus(`Matched! Role: ${isCaller ? "Caller" : "Callee"}. Connecting video...`);
 
-          // Close any previous peer connection
           if (rtcSessionRef.current) {
             rtcSessionRef.current.cleanup();
             rtcSessionRef.current = null;
@@ -117,13 +159,11 @@ export default function App() {
         });
 
         socket.on("offer", async ({ sessionId, sdp }) => {
-          // Drop message if not for the current session
           if (!currentSessionIdRef.current || sessionId !== currentSessionIdRef.current) {
             return;
           }
 
           if (!rtcSessionRef.current) {
-            // Queue offer if peer connection is still initializing
             pendingOfferRef.current = { sessionId, sdp };
             return;
           }
@@ -140,7 +180,6 @@ export default function App() {
         });
 
         socket.on("answer", async ({ sessionId, sdp }) => {
-          // Drop message if not for current session
           if (!currentSessionIdRef.current || sessionId !== currentSessionIdRef.current) {
             return;
           }
@@ -157,7 +196,6 @@ export default function App() {
         });
 
         socket.on("ice-candidate", async ({ sessionId, candidate }) => {
-          // Drop message if not for current session
           if (!currentSessionIdRef.current || sessionId !== currentSessionIdRef.current) {
             return;
           }
@@ -172,17 +210,21 @@ export default function App() {
         });
 
         socket.on("partner-left", ({ reason }) => {
+          if (queueTimeoutRef.current) {
+            clearTimeout(queueTimeoutRef.current);
+            queueTimeoutRef.current = null;
+          }
+          setIsSubmitting(false);
+
           setStatus(`Partner left (${reason}). Ready to start again.`);
           setSessionInfo(null);
           currentSessionIdRef.current = null;
           pendingOfferRef.current = null;
 
-          // Clear remote video
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = null;
           }
 
-          // Close active peer connection (keep local camera stream running)
           if (rtcSessionRef.current) {
             rtcSessionRef.current.cleanup();
             rtcSessionRef.current = null;
@@ -191,9 +233,14 @@ export default function App() {
           setUiState("idle");
         });
 
-        socket.on("disconnect", (reason) => {
-          setStatus(`Disconnected from server (${reason}).`);
-          setUiState("idle");
+        socket.on("disconnect", () => {
+          setIsConnected(false);
+          if (queueTimeoutRef.current) {
+            clearTimeout(queueTimeoutRef.current);
+            queueTimeoutRef.current = null;
+          }
+          setIsSubmitting(false);
+
           setSessionInfo(null);
           currentSessionIdRef.current = null;
           pendingOfferRef.current = null;
@@ -205,6 +252,10 @@ export default function App() {
             rtcSessionRef.current.cleanup();
             rtcSessionRef.current = null;
           }
+
+          setUiState("idle");
+          uiStateRef.current = "idle";
+          setStatus("Connection lost. Reconnecting...");
         });
       } catch (err) {
         if (!cancelled) {
@@ -217,6 +268,12 @@ export default function App() {
 
     return () => {
       cancelled = true;
+
+      if (queueTimeoutRef.current) {
+        clearTimeout(queueTimeoutRef.current);
+        queueTimeoutRef.current = null;
+      }
+      setIsSubmitting(false);
 
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -235,17 +292,61 @@ export default function App() {
     };
   }, []);
 
+  function handlePreferenceChange(option) {
+    if (uiState !== "idle" || isSubmitting) return;
+
+    if (option === "Anyone") {
+      setPreferences(["Anyone"]);
+      return;
+    }
+
+    let updated = preferences.filter((p) => p !== "Anyone");
+    if (updated.includes(option)) {
+      updated = updated.filter((p) => p !== option);
+    } else {
+      updated.push(option);
+    }
+
+    if (updated.length === 0) {
+      updated = ["Anyone"];
+    }
+
+    setPreferences(updated);
+  }
+
   function handleStart() {
-    if (uiState !== "idle" || !socketRef.current) return;
+    if (uiState !== "idle" || !isConnected || isSubmitting || !socketRef.current) return;
     setErrorMessage("");
-    setUiState("waiting");
-    setStatus("Joining queue. Waiting for a partner...");
-    socketRef.current.emit("join-queue");
+    setIsSubmitting(true);
+    setStatus("Submitting queue request...");
+
+    socketRef.current.emit("join-queue", {
+      identity,
+      preferences
+    });
+
+    queueTimeoutRef.current = setTimeout(() => {
+      queueTimeoutRef.current = null;
+      setIsSubmitting(false);
+      setUiState("idle");
+      setErrorMessage("Queue request timed out. The server did not respond.");
+      setStatus("Ready. Choose your preferences and press Start.");
+      if (socketRef.current) {
+        socketRef.current.emit("leave-session");
+      }
+    }, 5000);
   }
 
   function handleLeave() {
-    if (!socketRef.current) return;
-    socketRef.current.emit("leave-session");
+    if (queueTimeoutRef.current) {
+      clearTimeout(queueTimeoutRef.current);
+      queueTimeoutRef.current = null;
+    }
+    setIsSubmitting(false);
+
+    if (socketRef.current) {
+      socketRef.current.emit("leave-session");
+    }
 
     setSessionInfo(null);
     currentSessionIdRef.current = null;
@@ -261,21 +362,73 @@ export default function App() {
     }
 
     setUiState("idle");
-    setStatus("Ready. Press Start to join the queue.");
+    setStatus("Ready. Choose your preferences and press Start.");
   }
+
+  const isStartDisabled = !isConnected || isSubmitting || uiState !== "idle";
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", padding: "1.5rem", maxWidth: "900px", margin: "0 auto" }}>
-      <h2>Shuup (Phase 3: In-Memory Queue & Private Rooms)</h2>
+      <h2>Shuup (Phase 4: Preference-Aware Matchmaking)</h2>
 
       {errorMessage && (
         <div style={{ padding: "0.75rem 1rem", backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: "6px", marginBottom: "1rem" }}>
-          <strong>Error:</strong> {errorMessage}
+          <strong>Notice:</strong> {errorMessage}
         </div>
       )}
 
+      {/* Preferences Section (Visible & changeable while idle) */}
+      <section style={{ backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", padding: "1rem", borderRadius: "8px", marginBottom: "1rem" }}>
+        <h4 style={{ margin: "0 0 0.5rem 0" }}>Matching Preferences</h4>
+        
+        <div style={{ marginBottom: "0.75rem" }}>
+          <label style={{ fontWeight: "600", marginRight: "1rem" }}>Your Identity:</label>
+          {IDENTITIES.map((item) => (
+            <label key={item} style={{ marginRight: "1rem", cursor: uiState === "idle" && !isSubmitting ? "pointer" : "default" }}>
+              <input
+                type="radio"
+                name="identity"
+                value={item}
+                checked={identity === item}
+                disabled={uiState !== "idle" || isSubmitting}
+                onChange={(e) => setIdentity(e.target.value)}
+              />{" "}
+              {item}
+            </label>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: "0.75rem" }}>
+          <label style={{ fontWeight: "600", marginRight: "1rem" }}>Looking to meet:</label>
+          {PREFERENCES.map((item) => (
+            <label key={item} style={{ marginRight: "1rem", cursor: uiState === "idle" && !isSubmitting ? "pointer" : "default" }}>
+              <input
+                type="checkbox"
+                name="preferences"
+                value={item}
+                checked={preferences.includes(item)}
+                disabled={uiState !== "idle" || isSubmitting}
+                onChange={() => handlePreferenceChange(item)}
+              />{" "}
+              {item}
+            </label>
+          ))}
+        </div>
+
+        <p style={{ margin: "0.5rem 0 0 0", fontSize: "0.85rem", color: "#64748b" }}>
+          <em>Matching depends on who is online and is not guaranteed. When few users are online, waits may be longer.</em>
+        </p>
+      </section>
+
+      {/* Status Bar */}
       <div style={{ padding: "0.75rem 1rem", backgroundColor: "#f1f5f9", borderRadius: "6px", marginBottom: "1rem" }}>
         <p style={{ margin: 0 }}>
+          <strong>Server:</strong>{" "}
+          <span style={{ color: isConnected ? "#10b981" : "#ef4444", fontWeight: "bold" }}>
+            {isConnected ? "Connected" : "Disconnected"}
+          </span>
+        </p>
+        <p style={{ margin: "0.25rem 0 0 0" }}>
           <strong>State:</strong> <span style={{ textTransform: "uppercase", fontWeight: "bold" }}>{uiState}</span>
         </p>
         <p style={{ margin: "0.25rem 0 0 0" }}>
@@ -288,13 +441,23 @@ export default function App() {
         )}
       </div>
 
+      {/* Control Buttons */}
       <div style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem" }}>
         {uiState === "idle" && (
           <button
             onClick={handleStart}
-            style={{ padding: "0.6rem 1.5rem", fontSize: "1rem", cursor: "pointer", backgroundColor: "#10b981", color: "#ffffff", border: "none", borderRadius: "6px" }}
+            disabled={isStartDisabled}
+            style={{
+              padding: "0.6rem 1.5rem",
+              fontSize: "1rem",
+              cursor: isStartDisabled ? "not-allowed" : "pointer",
+              backgroundColor: isStartDisabled ? "#94a3b8" : "#10b981",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "6px"
+            }}
           >
-            Start
+            {isSubmitting ? "Submitting..." : "Start"}
           </button>
         )}
 
@@ -308,6 +471,7 @@ export default function App() {
         )}
       </div>
 
+      {/* Video View */}
       <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 320px" }}>
           <h4>Local Video (Self Preview)</h4>
