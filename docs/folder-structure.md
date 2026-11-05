@@ -34,10 +34,12 @@ Shuup/
     ├── package.json                # Backend dependencies, start scripts, and node --test script
     ├── src/
     │   ├── server.js               # Node HTTP server, /health endpoint, and Socket.IO initialization
+    │   ├── config.js               # Server configuration and tunable numeric constants with environment fallbacks
     │   ├── matchmaker.js           # In-memory queue, atomic mutual compatibility matcher, session store
     │   ├── compatibility.js        # Pure mutual compatibility rules and join-queue payload validator
     │   └── signaling.js            # WebRTC signaling router scoped strictly to paired partners
     └── test/
         ├── compatibility.test.js   # Unit tests for pure isCompatible rules and validateJoinPayload
-        └── matchmaker.test.js      # Unit tests for queue FIFO, 6-user scenario, and longest-waiter-first
+        ├── matchmaker.test.js      # Unit tests for queue FIFO, 6-user scenario, and longest-waiter-first
+        └── lifecycle.test.js       # Unit tests for recent-partner memory, ghost cleanup, and broaden prompt flow
 ```

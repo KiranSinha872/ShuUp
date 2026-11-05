@@ -1,12 +1,16 @@
 import http from "node:http";
 import { Server } from "socket.io";
+import {
+  PORT,
+  CORS_ORIGIN,
+  MATCH_WITH_ANYONE,
+  PING_INTERVAL,
+  PING_TIMEOUT,
+  GHOST_SWEEP_INTERVAL_MS
+} from "./config.js";
 import { validateJoinPayload } from "./compatibility.js";
 import { createMatchmaker } from "./matchmaker.js";
 import { setupSignaling } from "./signaling.js";
-
-const PORT = Number(process.env.PORT) || 4000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
-const MATCH_WITH_ANYONE = process.env.MATCH_WITH_ANYONE === "true";
 
 if (MATCH_WITH_ANYONE) {
   console.warn("[WARNING] MATCH_WITH_ANYONE feature flag is enabled. Preference matching is bypassed.");
@@ -31,10 +35,35 @@ const io = new Server(server, {
   cors: {
     origin: CORS_ORIGIN,
     methods: ["GET", "POST"]
-  }
+  },
+  pingInterval: PING_INTERVAL,
+  pingTimeout: PING_TIMEOUT
 });
 
 const matchmaker = createMatchmaker({ matchWithAnyone: MATCH_WITH_ANYONE });
+
+export function startGhostSweep(ioInstance, matchmakerInstance, intervalMs = GHOST_SWEEP_INTERVAL_MS) {
+  const timer = setInterval(() => {
+    const isConnected = (id) => Boolean(ioInstance.sockets.sockets.get(id)?.connected);
+    const orphaned = matchmakerInstance.sweepGhosts(isConnected);
+    for (const { notifySocketId, sessionId } of orphaned) {
+      const socket = ioInstance.sockets.sockets.get(notifySocketId);
+      if (socket) {
+        socket.leave(`session:${sessionId}`);
+        socket.emit("partner-left", { reason: "disconnected" });
+      }
+    }
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
+// Start periodic ghost sweep
+startGhostSweep(io, matchmaker);
+
+function isValidEmptyPayload(payload) {
+  return !payload || (typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 0);
+}
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
@@ -53,13 +82,18 @@ io.on("connection", (socket) => {
     }
 
     const isSocketConnected = (id) => Boolean(io.sockets.sockets.get(id)?.connected);
+    const onBroadenPrompt = (socketId, waitSeconds) => {
+      io.to(socketId).emit("broaden-prompt", { waitSeconds });
+    };
+
     const result = matchmaker.enqueueUser(
       {
         socketId: socket.id,
         identity: validation.identity,
         preferences: validation.preferences
       },
-      isSocketConnected
+      isSocketConnected,
+      onBroadenPrompt
     );
 
     if (result.status === "already_queued_or_in_session") {
@@ -83,7 +117,35 @@ io.on("connection", (socket) => {
       const callerSocket = io.sockets.sockets.get(callerId);
       const calleeSocket = io.sockets.sockets.get(calleeId);
 
-      // Join named private session room; matched event contains ONLY sessionId and caller role
+      if (callerSocket) {
+        callerSocket.join(`session:${sessionId}`);
+        callerSocket.emit("matched", { sessionId, isCaller: true });
+      }
+
+      if (calleeSocket) {
+        calleeSocket.join(`session:${sessionId}`);
+        calleeSocket.emit("matched", { sessionId, isCaller: false });
+      }
+    }
+  });
+
+  // User opts in to broaden preferences
+  socket.on("broaden-accept", (payload) => {
+    if (!isValidEmptyPayload(payload)) {
+      console.warn(`[Matchmaker] Dropped malformed broaden-accept from ${socket.id}`);
+      return;
+    }
+
+    const isSocketConnected = (id) => Boolean(io.sockets.sockets.get(id)?.connected);
+    const result = matchmaker.broadenAccept(socket.id, isSocketConnected);
+
+    if (result.status === "matched") {
+      const { sessionId, callerId, calleeId } = result;
+      console.log(`[Matchmaker] Broaden match: paired ${callerId} and ${calleeId}. Session: ${sessionId}`);
+
+      const callerSocket = io.sockets.sockets.get(callerId);
+      const calleeSocket = io.sockets.sockets.get(calleeId);
+
       if (callerSocket) {
         callerSocket.join(`session:${sessionId}`);
         callerSocket.emit("matched", { sessionId, isCaller: true });
@@ -97,7 +159,12 @@ io.on("connection", (socket) => {
   });
 
   // User intentionally leaves queue or call
-  socket.on("leave-session", () => {
+  socket.on("leave-session", (payload) => {
+    if (!isValidEmptyPayload(payload)) {
+      console.warn(`[Matchmaker] Dropped malformed leave-session payload from ${socket.id}`);
+      return;
+    }
+
     console.log(`[Socket] ${socket.id} requested leave-session`);
     const result = matchmaker.leaveSession(socket.id);
 
@@ -117,7 +184,7 @@ io.on("connection", (socket) => {
   // Handle client disconnect
   socket.on("disconnect", (reason) => {
     console.log(`[Socket] Disconnected: ${socket.id} (${reason})`);
-    const result = matchmaker.leaveSession(socket.id);
+    const result = matchmaker.disconnectUser(socket.id);
 
     if (result.wasInSession) {
       const partnerSocket = io.sockets.sockets.get(result.partnerId);

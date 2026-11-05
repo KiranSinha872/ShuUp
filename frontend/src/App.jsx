@@ -11,6 +11,7 @@ export default function App() {
   const [uiState, setUiState] = useState("idle"); // "idle" | "waiting" | "matched"
   const [isConnected, setIsConnected] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showBroadenBanner, setShowBroadenBanner] = useState(false);
   const [status, setStatus] = useState("Initializing media...");
   const [errorMessage, setErrorMessage] = useState("");
   const [sessionInfo, setSessionInfo] = useState(null);
@@ -27,11 +28,17 @@ export default function App() {
   const currentSessionIdRef = useRef(null);
   const pendingOfferRef = useRef(null);
   const queueTimeoutRef = useRef(null);
+
   const uiStateRef = useRef("idle");
+  const isSubmittingRef = useRef(false);
 
   useEffect(() => {
     uiStateRef.current = uiState;
   }, [uiState]);
+
+  useEffect(() => {
+    isSubmittingRef.current = isSubmitting;
+  }, [isSubmitting]);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,20 +94,34 @@ export default function App() {
         });
 
         socket.on("queue-status", (data) => {
+          // Late-reply guard: drop queue-status if client already timed out or left
+          if (!isSubmittingRef.current || uiStateRef.current !== "idle") {
+            return;
+          }
+
           if (queueTimeoutRef.current) {
             clearTimeout(queueTimeoutRef.current);
             queueTimeoutRef.current = null;
           }
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
 
           if (data.status === "waiting") {
             setUiState("waiting");
+            uiStateRef.current = "waiting";
             setStatus(data.message || "Waiting for a compatible partner...");
           } else if (data.status === "rejected") {
             setUiState("idle");
+            uiStateRef.current = "idle";
             setErrorMessage(data.message || "Queue request rejected.");
             setStatus("Ready. Please check your preferences and press Start.");
           }
+        });
+
+        socket.on("broaden-prompt", () => {
+          // Ignore late broaden-prompt unless currently in waiting state
+          if (uiStateRef.current !== "waiting") return;
+          setShowBroadenBanner(true);
         });
 
         socket.on("matched", async ({ sessionId, isCaller }) => {
@@ -109,10 +130,13 @@ export default function App() {
             queueTimeoutRef.current = null;
           }
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
+          setShowBroadenBanner(false);
 
           currentSessionIdRef.current = sessionId;
           setSessionInfo({ sessionId, role: isCaller ? "Caller" : "Callee" });
           setUiState("matched");
+          uiStateRef.current = "matched";
           setStatus(`Matched! Role: ${isCaller ? "Caller" : "Callee"}. Connecting video...`);
 
           if (rtcSessionRef.current) {
@@ -215,6 +239,8 @@ export default function App() {
             queueTimeoutRef.current = null;
           }
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
+          setShowBroadenBanner(false);
 
           setStatus(`Partner left (${reason}). Ready to start again.`);
           setSessionInfo(null);
@@ -231,6 +257,7 @@ export default function App() {
           }
 
           setUiState("idle");
+          uiStateRef.current = "idle";
         });
 
         socket.on("disconnect", () => {
@@ -240,6 +267,8 @@ export default function App() {
             queueTimeoutRef.current = null;
           }
           setIsSubmitting(false);
+          isSubmittingRef.current = false;
+          setShowBroadenBanner(false);
 
           setSessionInfo(null);
           currentSessionIdRef.current = null;
@@ -274,6 +303,8 @@ export default function App() {
         queueTimeoutRef.current = null;
       }
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
+      setShowBroadenBanner(false);
 
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -315,9 +346,11 @@ export default function App() {
   }
 
   function handleStart() {
-    if (uiState !== "idle" || !isConnected || isSubmitting || !socketRef.current) return;
+    if (uiStateRef.current !== "idle" || !isConnected || isSubmittingRef.current || !socketRef.current) return;
     setErrorMessage("");
+    setShowBroadenBanner(false);
     setIsSubmitting(true);
+    isSubmittingRef.current = true;
     setStatus("Submitting queue request...");
 
     socketRef.current.emit("join-queue", {
@@ -328,11 +361,61 @@ export default function App() {
     queueTimeoutRef.current = setTimeout(() => {
       queueTimeoutRef.current = null;
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
       setUiState("idle");
+      uiStateRef.current = "idle";
       setErrorMessage("Queue request timed out. The server did not respond.");
       setStatus("Ready. Choose your preferences and press Start.");
       if (socketRef.current) {
-        socketRef.current.emit("leave-session");
+        socketRef.current.emit("leave-session", {});
+      }
+    }, 5000);
+  }
+
+  function handleNext() {
+    if (uiStateRef.current !== "matched" || !socketRef.current || !isConnected || isSubmittingRef.current) return;
+    setShowBroadenBanner(false);
+
+    // 1. End current pairing
+    socketRef.current.emit("leave-session", {});
+
+    // 2. Tear down WebRTC for current pairing
+    setSessionInfo(null);
+    currentSessionIdRef.current = null;
+    pendingOfferRef.current = null;
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+
+    if (rtcSessionRef.current) {
+      rtcSessionRef.current.cleanup();
+      rtcSessionRef.current = null;
+    }
+
+    // 3. Immediately re-enter queue with existing preferences
+    setUiState("idle");
+    uiStateRef.current = "idle";
+    setErrorMessage("");
+    setIsSubmitting(true);
+    isSubmittingRef.current = true;
+    setStatus("Skipping partner. Re-entering queue...");
+
+    socketRef.current.emit("join-queue", {
+      identity,
+      preferences
+    });
+
+    queueTimeoutRef.current = setTimeout(() => {
+      queueTimeoutRef.current = null;
+      setIsSubmitting(false);
+      isSubmittingRef.current = false;
+      setUiState("idle");
+      uiStateRef.current = "idle";
+      setErrorMessage("Queue request timed out. The server did not respond.");
+      setStatus("Ready. Choose your preferences and press Start.");
+      if (socketRef.current) {
+        socketRef.current.emit("leave-session", {});
       }
     }, 5000);
   }
@@ -343,9 +426,11 @@ export default function App() {
       queueTimeoutRef.current = null;
     }
     setIsSubmitting(false);
+    isSubmittingRef.current = false;
+    setShowBroadenBanner(false);
 
     if (socketRef.current) {
-      socketRef.current.emit("leave-session");
+      socketRef.current.emit("leave-session", {});
     }
 
     setSessionInfo(null);
@@ -362,18 +447,54 @@ export default function App() {
     }
 
     setUiState("idle");
+    uiStateRef.current = "idle";
     setStatus("Ready. Choose your preferences and press Start.");
+  }
+
+  function handleBroadenAccept() {
+    setShowBroadenBanner(false);
+    if (socketRef.current && uiStateRef.current === "waiting") {
+      socketRef.current.emit("broaden-accept", {});
+      setStatus("Broadened preferences to Anyone. Searching for a partner...");
+    }
+  }
+
+  function handleBroadenDismiss() {
+    setShowBroadenBanner(false);
   }
 
   const isStartDisabled = !isConnected || isSubmitting || uiState !== "idle";
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", padding: "1.5rem", maxWidth: "900px", margin: "0 auto" }}>
-      <h2>Shuup (Phase 4: Preference-Aware Matchmaking)</h2>
+      <h2>Shuup (Phase 5: Session Lifecycle & Robustness)</h2>
 
       {errorMessage && (
         <div style={{ padding: "0.75rem 1rem", backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: "6px", marginBottom: "1rem" }}>
           <strong>Notice:</strong> {errorMessage}
+        </div>
+      )}
+
+      {/* Broaden Prompt Banner (Opt-in only) */}
+      {showBroadenBanner && uiState === "waiting" && (
+        <div style={{ padding: "0.75rem 1rem", backgroundColor: "#fef3c7", border: "1px solid #fde68a", color: "#92400e", borderRadius: "6px", marginBottom: "1rem" }}>
+          <p style={{ margin: "0 0 0.5rem 0", fontWeight: "500" }}>
+            No matches yet. Widen your search? You may be matched with people outside your selected preferences, if they're open to meeting you.
+          </p>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              onClick={handleBroadenAccept}
+              style={{ padding: "0.4rem 0.9rem", fontSize: "0.9rem", cursor: "pointer", backgroundColor: "#d97706", color: "#ffffff", border: "none", borderRadius: "4px", fontWeight: "600" }}
+            >
+              Widen search
+            </button>
+            <button
+              onClick={handleBroadenDismiss}
+              style={{ padding: "0.4rem 0.9rem", fontSize: "0.9rem", cursor: "pointer", backgroundColor: "#fef3c7", color: "#78350f", border: "1px solid #d97706", borderRadius: "4px" }}
+            >
+              Keep waiting
+            </button>
+          </div>
         </div>
       )}
 
@@ -461,13 +582,47 @@ export default function App() {
           </button>
         )}
 
-        {(uiState === "waiting" || uiState === "matched") && (
+        {uiState === "waiting" && (
           <button
             onClick={handleLeave}
             style={{ padding: "0.6rem 1.5rem", fontSize: "1rem", cursor: "pointer", backgroundColor: "#ef4444", color: "#ffffff", border: "none", borderRadius: "6px" }}
           >
-            {uiState === "waiting" ? "Cancel Queue" : "Leave Call"}
+            Cancel Queue
           </button>
+        )}
+
+        {uiState === "matched" && (
+          <>
+            <button
+              onClick={handleNext}
+              disabled={isSubmitting}
+              style={{
+                padding: "0.6rem 1.5rem",
+                fontSize: "1rem",
+                cursor: isSubmitting ? "not-allowed" : "pointer",
+                backgroundColor: isSubmitting ? "#94a3b8" : "#3b82f6",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "6px"
+              }}
+            >
+              Next
+            </button>
+            <button
+              onClick={handleLeave}
+              style={{
+                padding: "0.6rem 1.5rem",
+                fontSize: "1rem",
+                cursor: "pointer",
+                backgroundColor: "#ef4444",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "6px"
+              }}
+            >
+              Leave
+            </button>
+          </>
         )}
       </div>
 

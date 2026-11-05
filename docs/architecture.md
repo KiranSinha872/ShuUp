@@ -56,6 +56,7 @@ A match between User A and User B is valid if and only if **all** of the followi
   - If a user waits in the queue for 30 seconds without a match, the server emits a `broaden-prompt` (Phase 5).
   - Widening is strictly opt-in; the server never silently alters user preferences.
   - Upon receiving `broaden-accept`, the user's preference set expands to `Anyone`, enabling broader compatibility while still respecting the partner's mutual preferences.
+  - Broaden never overrides the recent-partner rule.
 
 ---
 
@@ -67,6 +68,8 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 |---|---|---|---|---|
 | `join-queue` | Client -> Server | `{ identity: string, preferences: string[] }` | Enters client into matchmaking queue | Implemented (Phase 4) |
 | `queue-status` | Server -> Client | `{ status: "waiting" \| "rejected", message: string }` | Queue status update or payload rejection reason | Implemented (Phase 4) |
+| `broaden-prompt` | Server -> Client | `{ waitSeconds: number }` | Prompt user to broaden preferences after 30s | Implemented (Phase 5) |
+| `broaden-accept` | Client -> Server | `{}` | User opts in to broaden preferences | Implemented (Phase 5) |
 | `matched` | Server -> Both Clients | `{ sessionId: string, isCaller: boolean }` | Pairs two sockets; carries strictly sessionId and caller role | Implemented (Phase 3) |
 | `offer` (client emit) | Client -> Server | `{ sdp: RTCSessionDescriptionInit }` | Caller sends WebRTC SDP offer | Implemented (Phase 2) |
 | `offer` (forwarded) | Server -> Partner | `{ sessionId: string, sdp: RTCSessionDescriptionInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
@@ -74,10 +77,8 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 | `answer` (forwarded) | Server -> Partner | `{ sessionId: string, sdp: RTCSessionDescriptionInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
 | `ice-candidate` (client emit) | Client -> Server | `{ candidate: RTCIceCandidateInit }` | Client sends local ICE candidate | Implemented (Phase 2) |
 | `ice-candidate` (forwarded) | Server -> Partner | `{ sessionId: string, candidate: RTCIceCandidateInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
-| `leave-session` | Client -> Server | `{ action?: "next" \| "stop" }` | Leaves active call or cancels waiting queue (Phase 3 uses `{}`; Phase 5 adds action) | Implemented (Phase 3) |
+| `leave-session` | Client -> Server | `{}` | Leaves active call or cancels waiting queue (Next re-enqueues client) | Implemented (Phase 3 & 5) |
 | `partner-left` | Server -> Client | `{ reason: "left" \| "disconnected" }` | Notifies remaining peer that partner left | Implemented (Phase 2) |
-| `broaden-prompt` | Server -> Client | `{ waitSeconds: number }` | Prompt user to broaden preferences after 30s | Planned (Phase 5) |
-| `broaden-accept` | Client -> Server | `{}` | User opts in to broaden preferences | Planned (Phase 5) |
 | `report-user` | Client -> Server | `{ sessionId: string, reason: string }` | Flags current partner for moderation | Planned (Phase 7) |
 | `block-user` | Client -> Server | `{ sessionId: string }` | Blocks current partner from rematching | Planned (Phase 7) |
 

@@ -1,9 +1,9 @@
 # Shuup - Progress Memory & State Log
 
 ## Current Status
-- **Current Phase:** Phase 4 complete
-- **Active Step:** Awaiting Phase 5 plan
-- **Next Step:** Phase 5 (Session Lifecycle & Robustness: Next/skip, recent-partner memory, 30s broaden prompt, ghost cleanup)
+- **Current Phase:** Phase 5 complete
+- **Active Step:** Awaiting Phase 6 plan
+- **Next Step:** Phase 6 (Split-screen video interface, responsive CSS, accessible layout)
 
 ---
 
@@ -15,6 +15,25 @@ To run the prototype locally, start both dev servers in separate terminal tabs:
 
 ---
 
+## Phase 5 Completed
+- **Commit:** `Phase 5: next, recent-partner memory, opt-in broaden, ghost cleanup and tests`
+- **Next / Skip Flow:** Next button in active call emits `leave-session` (`{}`), tears down WebRTC and remote video, and immediately dispatches `join-queue` with user's saved preferences from the client.
+- **Recent-Partner Exclusion:** In-memory tracking of recent partner socket pairs with configurable limit (`RECENT_PARTNER_LIMIT=5`) and TTL (`RECENT_PARTNER_TTL_MS=120000`). Applied bidirectionally on session end (Next, leave, partner-left). Socket entry cleaned on disconnect and expired entries purged in ghost sweep. Reloading tab resets socket ID without storing personal data.
+- **Broaden Prompt Banner:** After 30s queue wait, server emits `broaden-prompt`. Frontend displays opt-in banner ("No matches yet. Widen your search? You may be matched with people outside your selected preferences, if they're open to meeting you.") with "Widen search" and "Keep waiting". Opting in widens preferences for that single queue entry only while respecting mutual partner preferences.
+- **Ghost Socket & Session Sweep:** Background timer sweeps every 30s (`unref()`) to purge disconnected queue sockets, dissolve orphaned sessions, and notify surviving peers.
+- **Heartbeat & Ping:** Socket.IO ping interval (15s) and timeout (10s) configured via `config.js`.
+- **Late-Reply & Stale-Event Guards:** `uiStateRef` and `isSubmittingRef` ensure stale queue-status or late broaden-prompts are safely ignored.
+- **Test Suite:** 29 backend unit tests passing in ~165ms covering lifecycle, compatibility, and matchmaking.
+
+---
+
+## Notes for Phase 6
+- **Next Step:** Phase 6 plan approval before code implementation.
+- **Split-Screen Layout:** Full-height responsive video view (local preview + remote video) with clean overlay controls.
+- **Accessibility & Contrast:** High contrast buttons, labels, and status badges adhering to PRD requirements.
+
+---
+
 ## Phase 4 Completed
 - **Commit:** `Phase 4: preference-aware matching, validation, connection-state UI and tests`
 - **Pure Compatibility (`compatibility.js`):** Mutual compatibility checking; enforces the rule that `"Anyone"` is the only preference that accepts `"Prefer not to say"`.
@@ -22,12 +41,6 @@ To run the prototype locally, start both dev servers in separate terminal tabs:
 - **Matchmaker Updates (`matchmaker.js`):** Longest-waiter-first queue ordering, synchronous atomic matching (zero awaits), disconnected socket pruning, and `MATCH_WITH_ANYONE` flag support.
 - **Privacy & Telemetry:** Matched event carries only `sessionId` and caller role. Zero logging of identities or preferences.
 - **Connection-Resilient UI (`App.jsx`):** Live server connection status indicator, disabled Start button when offline/submitting, 5-second request timeout with auto-leave, and graceful reconnect state management.
-- **Test Suite (`test/`):** 18 unit tests using Node's native `node --test` runner covering the Section 6.4 6-user scenario, payload edge cases, and longest waiter matching.
-
----
-
-## Notes for Phase 5
-- **Queue Timeout Edge Case:** After the frontend's 5-second queue timeout triggers (which returns the UI to `idle` and emits `leave-session`), a severely delayed `queue-status: "waiting"` from the server could theoretically arrive late and shift the UI back into `WAITING` while the server has already removed the user. Phase 5 should ensure late incoming `queue-status` packets are ignored if the UI has already returned to `idle` or if `isSubmitting` is false.
 
 ---
 
