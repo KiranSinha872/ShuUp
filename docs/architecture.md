@@ -70,7 +70,8 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 | `queue-status` | Server -> Client | `{ status: "waiting" \| "rejected", message: string }` | Queue status update or payload rejection reason | Implemented (Phase 4) |
 | `broaden-prompt` | Server -> Client | `{ waitSeconds: number }` | Prompt user to broaden preferences after 30s | Implemented (Phase 5) |
 | `broaden-accept` | Client -> Server | `{}` | User opts in to broaden preferences | Implemented (Phase 5) |
-| `matched` | Server -> Both Clients | `{ sessionId: string, isCaller: boolean }` | Pairs two sockets; carries strictly sessionId and caller role | Implemented (Phase 3) |
+| `matched` | Server -> Both Clients | `{ sessionId: string, isCaller: boolean, iceServers: RTCIceServer[], iceTransportPolicy: "all" \| "relay" }` | Pairs two sockets with session ID, caller role, and server-configured ICE servers and policy | Implemented (Phase 3 & 6a) |
+| `connection-stats` | Client -> Server | `{ sessionId: string, connectionType: "direct" \| "relay" \| "unknown" }` | Client reports WebRTC candidate pair type for telemetry (rate-limited, no IPs/strings) | Implemented (Phase 6a) |
 | `offer` (client emit) | Client -> Server | `{ sdp: RTCSessionDescriptionInit }` | Caller sends WebRTC SDP offer | Implemented (Phase 2) |
 | `offer` (forwarded) | Server -> Partner | `{ sessionId: string, sdp: RTCSessionDescriptionInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
 | `answer` (client emit) | Client -> Server | `{ sdp: RTCSessionDescriptionInit }` | Callee responds with WebRTC SDP answer | Implemented (Phase 2) |
@@ -84,7 +85,27 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 
 ---
 
-## 4. Admin Telemetry & Persistence (Phase 8)
+## 4. ICE Connectivity & Privacy Architecture (Phase 6)
+
+### 4.1 ICE Policy & Privacy
+- **Direct Mode (`iceTransportPolicy: "all"`):** Default for the private tester phase. Peers attempt peer-to-peer connection via STUN. **Privacy limitation:** Direct mode reveals the user's public IP address to the connected partner via WebRTC candidate exchange.
+- **Relay Mode (`iceTransportPolicy: "relay"`):** Hides both peers' IP addresses behind the TURN relay server. **Public release requirement:** A public launch must enforce relay mode with adequate TURN bandwidth capacity to uphold Section 9 privacy rules.
+- **Relay-Without-TURN Refusal:** If `ICE_TRANSPORT_POLICY` is set to `"relay"` but no TURN credentials are valid/available, the server refuses to fall back to STUN. It terminates the pairing immediately with a clear error so IP addresses are never exposed accidentally.
+
+### 4.2 Credential Protection
+- Turn credentials are kept exclusively on the server in `backend/.env`.
+- The server delivers short-lived credentials directly inside the `matched` Socket.IO event.
+- Zero TURN or ICE configuration is stored in client code or client environment variables.
+
+### 4.3 Phase 6b Tunnel Testing Guidelines (For Later Verification)
+- When testing mobile data against a laptop via Cloudflare Tunnel (`cloudflared`):
+  1. Open the laptop browser through the frontend tunnel URL too (not `localhost`) so both clients test on equivalent network topologies.
+  2. Restrict Vite `allowedHosts` in `frontend/vite.config.js` to the exact tunnel hostname, and remove it immediately after testing.
+  3. Note that ad-hoc quick-tunnel URLs change on every process restart, and the application does not yet have an invite-code gate (coming in Phase 7).
+
+---
+
+## 5. Admin Telemetry & Persistence (Phase 8)
 
 When Supabase is integrated in Phase 8:
 - Backend writes anonymous session metrics (`sessionId`, `durationSeconds`, `connectionType`, `startedAt`, `endedAt`).

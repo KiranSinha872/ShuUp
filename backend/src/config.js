@@ -13,3 +13,7 @@ export const RECENT_PARTNER_TTL_MS = parseNumber(process.env.RECENT_PARTNER_TTL_
 export const GHOST_SWEEP_INTERVAL_MS = parseNumber(process.env.GHOST_SWEEP_INTERVAL_MS, 30_000);
 export const PING_INTERVAL = parseNumber(process.env.PING_INTERVAL, 15_000);
 export const PING_TIMEOUT = parseNumber(process.env.PING_TIMEOUT, 10_000);
+
+export const ICE_TRANSPORT_POLICY = process.env.ICE_TRANSPORT_POLICY === "relay" ? "relay" : "all";
+export const METERED_DOMAIN = (process.env.METERED_DOMAIN || "").trim();
+export const METERED_API_KEY = (process.env.METERED_API_KEY || "").trim();

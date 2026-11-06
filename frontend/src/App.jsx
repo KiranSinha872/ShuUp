@@ -4,6 +4,7 @@ import { createPeerConnection } from "./webrtc.js";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:4000";
 
+
 const IDENTITIES = ["Man", "Woman", "Non-binary", "Prefer not to say"];
 const PREFERENCES = ["Men", "Women", "Non-binary people", "Anyone"];
 
@@ -28,6 +29,7 @@ export default function App() {
   const currentSessionIdRef = useRef(null);
   const pendingOfferRef = useRef(null);
   const queueTimeoutRef = useRef(null);
+  const iceDisconnectTimerRef = useRef(null);
 
   const uiStateRef = useRef("idle");
   const isSubmittingRef = useRef(false);
@@ -124,10 +126,14 @@ export default function App() {
           setShowBroadenBanner(true);
         });
 
-        socket.on("matched", async ({ sessionId, isCaller }) => {
+        socket.on("matched", async ({ sessionId, isCaller, iceServers, iceTransportPolicy }) => {
           if (queueTimeoutRef.current) {
             clearTimeout(queueTimeoutRef.current);
             queueTimeoutRef.current = null;
+          }
+          if (iceDisconnectTimerRef.current) {
+            clearTimeout(iceDisconnectTimerRef.current);
+            iceDisconnectTimerRef.current = null;
           }
           setIsSubmitting(false);
           isSubmittingRef.current = false;
@@ -144,7 +150,35 @@ export default function App() {
             rtcSessionRef.current = null;
           }
 
+          function triggerIceNetworkFailure() {
+            if (iceDisconnectTimerRef.current) {
+              clearTimeout(iceDisconnectTimerRef.current);
+              iceDisconnectTimerRef.current = null;
+            }
+            if (uiStateRef.current === "matched") {
+              if (socketRef.current) {
+                socketRef.current.emit("leave-session", {});
+              }
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = null;
+              }
+              if (rtcSessionRef.current) {
+                rtcSessionRef.current.cleanup();
+                rtcSessionRef.current = null;
+              }
+              setSessionInfo(null);
+              currentSessionIdRef.current = null;
+              pendingOfferRef.current = null;
+              setUiState("idle");
+              uiStateRef.current = "idle";
+              setErrorMessage("Call disconnected due to network issues.");
+              setStatus("Ready. Choose your preferences and press Start.");
+            }
+          }
+
           const rtc = createPeerConnection({
+            iceServers,
+            iceTransportPolicy,
             onIceCandidate: (candidate) => {
               socket.emit("ice-candidate", { candidate });
             },
@@ -152,6 +186,28 @@ export default function App() {
               if (remoteVideoRef.current) {
                 remoteVideoRef.current.srcObject = remoteStream;
               }
+            },
+            onIceConnectionStateChange: (state) => {
+              if (state === "failed") {
+                triggerIceNetworkFailure();
+              } else if (state === "disconnected") {
+                if (iceDisconnectTimerRef.current) {
+                  clearTimeout(iceDisconnectTimerRef.current);
+                }
+                iceDisconnectTimerRef.current = setTimeout(() => {
+                  iceDisconnectTimerRef.current = null;
+                  triggerIceNetworkFailure();
+                }, 5000);
+              } else if (state === "connected" || state === "completed") {
+                if (iceDisconnectTimerRef.current) {
+                  clearTimeout(iceDisconnectTimerRef.current);
+                  iceDisconnectTimerRef.current = null;
+                }
+                setStatus("Call connected with partner.");
+              }
+            },
+            onConnectionStats: (connectionType) => {
+              socket.emit("connection-stats", { sessionId, connectionType });
             }
           });
 
@@ -238,6 +294,10 @@ export default function App() {
             clearTimeout(queueTimeoutRef.current);
             queueTimeoutRef.current = null;
           }
+          if (iceDisconnectTimerRef.current) {
+            clearTimeout(iceDisconnectTimerRef.current);
+            iceDisconnectTimerRef.current = null;
+          }
           setIsSubmitting(false);
           isSubmittingRef.current = false;
           setShowBroadenBanner(false);
@@ -265,6 +325,10 @@ export default function App() {
           if (queueTimeoutRef.current) {
             clearTimeout(queueTimeoutRef.current);
             queueTimeoutRef.current = null;
+          }
+          if (iceDisconnectTimerRef.current) {
+            clearTimeout(iceDisconnectTimerRef.current);
+            iceDisconnectTimerRef.current = null;
           }
           setIsSubmitting(false);
           isSubmittingRef.current = false;
@@ -301,6 +365,10 @@ export default function App() {
       if (queueTimeoutRef.current) {
         clearTimeout(queueTimeoutRef.current);
         queueTimeoutRef.current = null;
+      }
+      if (iceDisconnectTimerRef.current) {
+        clearTimeout(iceDisconnectTimerRef.current);
+        iceDisconnectTimerRef.current = null;
       }
       setIsSubmitting(false);
       isSubmittingRef.current = false;
@@ -374,6 +442,10 @@ export default function App() {
 
   function handleNext() {
     if (uiStateRef.current !== "matched" || !socketRef.current || !isConnected || isSubmittingRef.current) return;
+    if (iceDisconnectTimerRef.current) {
+      clearTimeout(iceDisconnectTimerRef.current);
+      iceDisconnectTimerRef.current = null;
+    }
     setShowBroadenBanner(false);
 
     // 1. End current pairing
@@ -424,6 +496,10 @@ export default function App() {
     if (queueTimeoutRef.current) {
       clearTimeout(queueTimeoutRef.current);
       queueTimeoutRef.current = null;
+    }
+    if (iceDisconnectTimerRef.current) {
+      clearTimeout(iceDisconnectTimerRef.current);
+      iceDisconnectTimerRef.current = null;
     }
     setIsSubmitting(false);
     isSubmittingRef.current = false;

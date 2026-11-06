@@ -1,9 +1,9 @@
 # Shuup - Progress Memory & State Log
 
 ## Current Status
-- **Current Phase:** Phase 5 complete
-- **Active Step:** Awaiting Phase 6 plan
-- **Next Step:** Phase 6 (Split-screen video interface, responsive CSS, accessible layout)
+- **Current Phase:** Phase 6a complete; Phase 6b (TURN sign-up and cross-network test) next
+- **Active Step:** Ready for Phase 6b (TURN account setup, credential configuration in backend/.env, cross-network verification)
+- **Next Step:** Phase 6b (TURN sign-up and cross-network test)
 
 ---
 
@@ -12,6 +12,24 @@ To run the prototype locally, start both dev servers in separate terminal tabs:
 1. **Backend:** `cd backend && npm run dev` (starts on port 4000).
 2. **Frontend:** `cd frontend && npm run dev` (starts on port 3000).
 - The browser UI shows `Server: Connected` (green) only when the backend server is active. If the backend is stopped or unreachable, the UI indicates `Server: Disconnected` (red) and disables the Start button to prevent dead clicks.
+
+---
+
+## Phase 6a Complete
+- **ICE Configuration & Management (`ice.js`):** Server delivers `iceServers` (Google STUN default) and `iceTransportPolicy` (`"all"` default, `"relay"` configurable) inside `matched`. TURN credentials cached with 1-hr TTL, 3s timeout, and concurrent request deduplication.
+- **Relay-Without-TURN Refusal:** If `ICE_TRANSPORT_POLICY="relay"` and no TURN servers are available, the server terminates pairing and emits a clear rejection without falling back to STUN.
+- **Telemetry (`connection-stats`):** Clients classify candidate pairs as `"direct"`, `"relay"`, or `"unknown"`. Server strictly validates payload and rate-limits to once per session per socket without logging IP addresses or raw candidate strings.
+- **Failure Handling:** Client automatically tears down call cleanly if `iceConnectionState === "failed"` or if disconnected for > 5s, resetting to `idle` with camera running and displaying `"Call disconnected due to network issues."`.
+- **Verified Fixes:**
+  - `leaveSession` / abort paths: recent partners are not recorded on aborts (relay refusal or partner leaving during ICE lookup), allowing immediate re-match.
+  - Stale abort guard: `handleMatchedSession` checks `hasActiveSession(sessionId)` before dissolving, preventing eviction of re-queued users or new sessions.
+- **Test Suite:** 41 unit tests passing in `backend/test/` covering connectivity, lifecycle, payload validation, and secret sanitization.
+
+---
+
+## Notes for Phase 6b
+- **TURN Account & Tunnel Testing:** Configure `METERED_DOMAIN` and `METERED_API_KEY` in `backend/.env`. Test across networks (mobile data vs Wi-Fi) using Cloudflare Tunnel (`cloudflared`).
+- **Privacy Notice:** Direct mode exposes users' public IP addresses to connected peers via WebRTC candidate exchange. Public production release requires relay mode with adequate TURN bandwidth capacity.
 
 ---
 

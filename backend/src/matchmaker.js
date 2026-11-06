@@ -241,7 +241,7 @@ export function createMatchmaker(options = {}) {
     return { status: "widened" };
   }
 
-  function leaveSession(socketId) {
+  function leaveSession(socketId, { recordRecent = true } = {}) {
     const qIndex = waitingQueue.findIndex((item) => item.socketId === socketId);
     if (qIndex !== -1) {
       const [entry] = waitingQueue.splice(qIndex, 1);
@@ -257,12 +257,39 @@ export function createMatchmaker(options = {}) {
       activeSessions.delete(sessionId);
 
       // Record recent partners in both directions
-      recordRecentPartners(socketId, partnerId);
+      if (recordRecent) {
+        recordRecentPartners(socketId, partnerId);
+      }
 
       return { wasInSession: true, sessionId, partnerId };
     }
 
     return { wasIdle: true };
+  }
+
+  function hasActiveSession(sessionId) {
+    return activeSessions.has(sessionId);
+  }
+
+  function dissolveSession(sessionId, { recordRecent = false } = {}) {
+    const session = activeSessions.get(sessionId);
+    if (!session) return false;
+
+    const { callerId, calleeId } = session;
+    activeSessions.delete(sessionId);
+
+    if (userSessions.get(callerId)?.sessionId === sessionId) {
+      userSessions.delete(callerId);
+    }
+    if (userSessions.get(calleeId)?.sessionId === sessionId) {
+      userSessions.delete(calleeId);
+    }
+
+    if (recordRecent) {
+      recordRecentPartners(callerId, calleeId);
+    }
+
+    return true;
   }
 
   function disconnectUser(socketId) {
@@ -338,10 +365,12 @@ export function createMatchmaker(options = {}) {
     enqueueUser,
     broadenAccept,
     leaveSession,
+    dissolveSession,
     disconnectUser,
     sweepGhosts,
     getSessionInfo,
     getPartnerId,
+    hasActiveSession,
     isQueued,
     isInSession,
     getWaitingQueue,
