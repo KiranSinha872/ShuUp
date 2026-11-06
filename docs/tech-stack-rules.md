@@ -34,11 +34,14 @@ This document establishes the technical constraints, coding standards, and secur
 - **Server-Side Validation:** The backend must strictly validate every incoming socket event payload with pure validation functions (e.g. `validateJoinPayload`, `isValidEmptyPayload`, and `connection-stats` validator). Never trust partner IDs or data types sent from clients.
 - **Signaling Partner Isolation:** The server stores partner pairings internally. Offer, answer, and ICE candidates are dispatched solely to the paired partner socket verified in memory.
 - **Ghost Socket Cleanup:** Active heartbeat monitoring and disconnect hooks immediately purge stale sockets from the matchmaking queue and notify active partners.
-- **ICE Credential Isolation & Privacy (Phase 6):**
+- **ICE Policy, Privacy & Zero-Payment Constraint (Phase 6):**
+  - **Zero-Payment Rule:** Never use any third-party service, provider, or infrastructure that requires a credit card or payment method on file. Only strictly free resources with no card required may be used.
+  - The default is `ICE_TRANSPORT_POLICY=all` using Google public STUN (`stun:stun.l.google.com:19302`).
+  - Direct P2P mode lets the partner see the user's public IP address through WebRTC candidate exchange; private testers must be informed of this limitation.
+  - "relay" policy must NOT be enabled without valid TURN credentials in `backend/.env`. If relay policy is active and TURN credentials fail or are absent, the server must refuse the pairing and terminate with an error rather than falling back to STUN.
+  - The TURN fetch and configuration logic in `ice.js` remains completely dormant until credentials exist in `backend/.env`. Provider choice remains open (no provider decided).
   - TURN credentials and provider secrets reside exclusively in `backend/.env`. The frontend has zero ICE or TURN environment variables.
   - Ephemeral credentials are passed to clients strictly inside the `matched` event payload.
-  - Direct P2P mode (`iceTransportPolicy: "all"`) reveals the user's public IP address to the connected peer. A public launch requires relay mode with adequate TURN capacity to uphold Section 9 privacy rules.
-  - If relay policy is active and TURN credentials fail or are absent, the server must refuse the pairing and terminate with an error rather than falling back to STUN.
   - Connection telemetry (`connection-stats`) reports strictly the enum `"direct" | "relay" | "unknown"`. Zero IP addresses, ports, or raw candidate strings may be accepted, logged, or recorded.
 
 ### Phase 7 (Trust & Safety)

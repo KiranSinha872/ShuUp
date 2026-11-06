@@ -58,13 +58,17 @@ Development proceeds sequentially through 9 distinct phases. Each milestone must
 
 ---
 
-### Phase 6: Network Connectivity & TURN Relay
-- **Scope:**
-  - [OPEN] Verify current free quota limits for Metered.ca TURN service.
-  - Add TURN server configuration credentials to backend config and relay to clients.
-  - Log WebRTC connection statistics (`RTCIceCandidatePairStats`) to detect direct vs TURN relay usage.
+### Phase 6: Network Connectivity (STUN Baseline & TURN Deferred)
+- **Phase 6a (Complete):**
+  - Implement ICE management in `ice.js`: delivers `iceServers` (Google public STUN baseline) and `iceTransportPolicy` (`"all"` default, `"relay"` configurable) inside `matched`.
+  - Log WebRTC connection statistics (`connection-stats` event) to detect direct vs relay candidate pairs without storing IP addresses.
+  - Relay-without-TURN refusal: if `ICE_TRANSPORT_POLICY="relay"` without credentials, call is refused cleanly without falling back to STUN.
+  - Ephemeral ICE server delivery in `matched`, mid-call disconnect recovery (5s timer), and zero client-side ICE credentials.
+- **Phase 6b (Deferred):**
+  - Deferred: no free no-card TURN option chosen; STUN-only for now; revisit if real users cannot connect.
+  - The TURN fetch and configuration logic in `ice.js` remains dormant until credentials exist in `backend/.env`. Provider choice remains open.
 - **Acceptance Check:**
-  - Works with two real browsers across different networks (e.g., home Wi-Fi and mobile hotspot via Cloudflare Tunnel/ngrok), maintaining stable audio and video.
+  - Works with two real browsers establishing direct P2P connection via STUN baseline, logging candidate pair stats and handling network disconnect cleanly.
 
 ---
 

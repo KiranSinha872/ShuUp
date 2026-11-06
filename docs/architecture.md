@@ -88,20 +88,20 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 ## 4. ICE Connectivity & Privacy Architecture (Phase 6)
 
 ### 4.1 ICE Policy & Privacy
-- **Direct Mode (`iceTransportPolicy: "all"`):** Default for the private tester phase. Peers attempt peer-to-peer connection via STUN. **Privacy limitation:** Direct mode reveals the user's public IP address to the connected partner via WebRTC candidate exchange.
-- **Relay Mode (`iceTransportPolicy: "relay"`):** Hides both peers' IP addresses behind the TURN relay server. **Public release requirement:** A public launch must enforce relay mode with adequate TURN bandwidth capacity to uphold Section 9 privacy rules.
-- **Relay-Without-TURN Refusal:** If `ICE_TRANSPORT_POLICY` is set to `"relay"` but no TURN credentials are valid/available, the server refuses to fall back to STUN. It terminates the pairing immediately with a clear error so IP addresses are never exposed accidentally.
+- **Default Policy (`ICE_TRANSPORT_POLICY=all`):** Default for the application and private tester phase using Google public STUN (`stun:stun.l.google.com:19302`). Peers attempt a direct peer-to-peer connection via STUN.
+- **Privacy Limitation (Direct Mode):** Direct mode reveals the user's public IP address to the connected partner through WebRTC candidate exchange. Private testers must be informed of this limitation.
+- **Relay Policy (`ICE_TRANSPORT_POLICY=relay`):** Hides both peers' IP addresses behind a TURN relay server. A public launch requires relay mode with adequate TURN bandwidth capacity to uphold Section 9 privacy rules.
+- **Relay-Without-TURN Refusal:** "relay" mode must NOT be enabled without valid TURN credentials in `backend/.env`. When `ICE_TRANSPORT_POLICY="relay"` and no TURN credentials exist, the server immediately refuses pairing with a clear rejection error rather than falling back to STUN, ensuring IP addresses are never exposed accidentally.
+- **Dormant TURN Infrastructure:** The dynamic TURN credential fetch and caching logic in `ice.js` remains completely dormant until credentials are provided in `backend/.env`. Provider choice remains open with no specific provider decided, adhering to the rule that no payment method or card may be required.
 
 ### 4.2 Credential Protection
-- Turn credentials are kept exclusively on the server in `backend/.env`.
+- TURN credentials and provider secrets reside exclusively in `backend/.env`.
 - The server delivers short-lived credentials directly inside the `matched` Socket.IO event.
 - Zero TURN or ICE configuration is stored in client code or client environment variables.
 
-### 4.3 Phase 6b Tunnel Testing Guidelines (For Later Verification)
-- When testing mobile data against a laptop via Cloudflare Tunnel (`cloudflared`):
-  1. Open the laptop browser through the frontend tunnel URL too (not `localhost`) so both clients test on equivalent network topologies.
-  2. Restrict Vite `allowedHosts` in `frontend/vite.config.js` to the exact tunnel hostname, and remove it immediately after testing.
-  3. Note that ad-hoc quick-tunnel URLs change on every process restart, and the application does not yet have an invite-code gate (coming in Phase 7).
+### 4.3 Phase 6b Deferral Note
+- Phase 6b (TURN account setup and cross-network tunnel testing) is deferred since no free, no-card TURN provider has been chosen.
+- The system operates in STUN-only mode for now, to be revisited only if real users cannot connect.
 
 ---
 

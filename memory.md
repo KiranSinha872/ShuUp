@@ -1,9 +1,9 @@
 # Shuup - Progress Memory & State Log
 
 ## Current Status
-- **Current Phase:** Phase 6a complete; Phase 6b (TURN sign-up and cross-network test) next
-- **Active Step:** Ready for Phase 6b (TURN account setup, credential configuration in backend/.env, cross-network verification)
-- **Next Step:** Phase 6b (TURN sign-up and cross-network test)
+- **Current Phase:** Phase 6a complete; Phase 6b deferred (free-only); next step Phase 7 plan (trust and safety)
+- **Active Step:** Awaiting Phase 7 plan for trust, safety, and invite gate
+- **Next Step:** Phase 7 plan (trust and safety)
 
 ---
 
@@ -15,7 +15,7 @@ To run the prototype locally, start both dev servers in separate terminal tabs:
 
 ---
 
-## Phase 6a Complete
+## Phase 6a Complete & Phase 6b Deferred
 - **ICE Configuration & Management (`ice.js`):** Server delivers `iceServers` (Google STUN default) and `iceTransportPolicy` (`"all"` default, `"relay"` configurable) inside `matched`. TURN credentials cached with 1-hr TTL, 3s timeout, and concurrent request deduplication.
 - **Relay-Without-TURN Refusal:** If `ICE_TRANSPORT_POLICY="relay"` and no TURN servers are available, the server terminates pairing and emits a clear rejection without falling back to STUN.
 - **Telemetry (`connection-stats`):** Clients classify candidate pairs as `"direct"`, `"relay"`, or `"unknown"`. Server strictly validates payload and rate-limits to once per session per socket without logging IP addresses or raw candidate strings.
@@ -23,13 +23,10 @@ To run the prototype locally, start both dev servers in separate terminal tabs:
 - **Verified Fixes:**
   - `leaveSession` / abort paths: recent partners are not recorded on aborts (relay refusal or partner leaving during ICE lookup), allowing immediate re-match.
   - Stale abort guard: `handleMatchedSession` checks `hasActiveSession(sessionId)` before dissolving, preventing eviction of re-queued users or new sessions.
+- **Phase 6b Deferred:** No free no-card TURN option chosen; prototype remains on STUN-only baseline for now. Revisit only if real users cannot connect. The TURN fetch logic in `ice.js` is dormant.
+- **Privacy Notice:** Direct mode exposes users' public IP addresses to connected peers via WebRTC candidate exchange; private testers must be informed.
+- **Zero-Payment Constraint:** Never use any third-party service requiring a payment method or credit card on file.
 - **Test Suite:** 41 unit tests passing in `backend/test/` covering connectivity, lifecycle, payload validation, and secret sanitization.
-
----
-
-## Notes for Phase 6b
-- **TURN Account & Tunnel Testing:** Configure `METERED_DOMAIN` and `METERED_API_KEY` in `backend/.env`. Test across networks (mobile data vs Wi-Fi) using Cloudflare Tunnel (`cloudflared`).
-- **Privacy Notice:** Direct mode exposes users' public IP addresses to connected peers via WebRTC candidate exchange. Public production release requires relay mode with adequate TURN bandwidth capacity.
 
 ---
 
