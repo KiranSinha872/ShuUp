@@ -11,6 +11,7 @@ export function createMatchmaker(options = {}) {
   const broadenWaitSeconds = options.broadenWaitSeconds ?? BROADEN_WAIT_SECONDS;
   const recentPartnerLimit = options.recentPartnerLimit ?? RECENT_PARTNER_LIMIT;
   const recentPartnerTtlMs = options.recentPartnerTtlMs ?? RECENT_PARTNER_TTL_MS;
+  const isBlocked = options.isBlocked || (() => false);
 
   // Injected clock and timer scheduler for deterministic testing
   const now = options.timeProvider || (() => Date.now());
@@ -114,6 +115,12 @@ export function createMatchmaker(options = {}) {
         continue;
       }
 
+      // Check block status between tokens (enforced in both directions)
+      if (candidate.hashedToken && user.hashedToken && isBlocked(candidate.hashedToken, user.hashedToken)) {
+        candidateIndex++;
+        continue;
+      }
+
       // Check mutual compatibility using effective preferences
       const candidateEffective = getEffectiveUser(candidate);
       const userEffective = { identity, preferences };
@@ -128,6 +135,8 @@ export function createMatchmaker(options = {}) {
         activeSessions.set(sessionId, {
           callerId: candidate.socketId,
           calleeId: socketId,
+          callerToken: candidate.hashedToken || null,
+          calleeToken: user.hashedToken || null,
           createdAt: now()
         });
 
@@ -150,6 +159,7 @@ export function createMatchmaker(options = {}) {
       socketId,
       identity,
       preferences,
+      hashedToken: user.hashedToken || null,
       joinedAt: now(),
       hasPromptedBroaden: false,
       isWidened: false,
@@ -200,6 +210,12 @@ export function createMatchmaker(options = {}) {
         continue;
       }
 
+      // Check block status between tokens (enforced in both directions)
+      if (candidate.hashedToken && entry.hashedToken && isBlocked(candidate.hashedToken, entry.hashedToken)) {
+        candidateIndex++;
+        continue;
+      }
+
       const candidateEffective = getEffectiveUser(candidate);
       const entryEffective = getEffectiveUser(entry);
 
@@ -221,6 +237,8 @@ export function createMatchmaker(options = {}) {
         activeSessions.set(sessionId, {
           callerId: caller.socketId,
           calleeId: callee.socketId,
+          callerToken: caller.hashedToken || null,
+          calleeToken: callee.hashedToken || null,
           createdAt: now()
         });
 
@@ -252,6 +270,7 @@ export function createMatchmaker(options = {}) {
     const sessionInfo = userSessions.get(socketId);
     if (sessionInfo) {
       const { sessionId, partnerId } = sessionInfo;
+      const session = activeSessions.get(sessionId);
       userSessions.delete(socketId);
       userSessions.delete(partnerId);
       activeSessions.delete(sessionId);
@@ -261,10 +280,20 @@ export function createMatchmaker(options = {}) {
         recordRecentPartners(socketId, partnerId);
       }
 
-      return { wasInSession: true, sessionId, partnerId };
+      return {
+        wasInSession: true,
+        sessionId,
+        partnerId,
+        callerToken: session?.callerToken || null,
+        calleeToken: session?.calleeToken || null
+      };
     }
 
     return { wasIdle: true };
+  }
+
+  function getActiveSession(sessionId) {
+    return activeSessions.get(sessionId) || null;
   }
 
   function hasActiveSession(sessionId) {
@@ -369,6 +398,7 @@ export function createMatchmaker(options = {}) {
     disconnectUser,
     sweepGhosts,
     getSessionInfo,
+    getActiveSession,
     getPartnerId,
     hasActiveSession,
     isQueued,

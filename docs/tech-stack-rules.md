@@ -44,11 +44,29 @@ This document establishes the technical constraints, coding standards, and secur
   - Ephemeral credentials are passed to clients strictly inside the `matched` event payload.
   - Connection telemetry (`connection-stats`) reports strictly the enum `"direct" | "relay" | "unknown"`. Zero IP addresses, ports, or raw candidate strings may be accepted, logged, or recorded.
 
-### Phase 7 (Trust & Safety)
-- **Invite Code Validation:** Invite codes are checked strictly on the server before enrolling any socket into the queue.
-- **Event Rate Limiting:** Apply an in-memory sliding window rate limiter on high-frequency socket events (`join-queue`, `leave-session`, `report-user`) to prevent denial-of-service or connection flooding.
-- **Production Hygiene:** Suppress all verbose console debug logging in production environments (`process.env.NODE_ENV === 'production'`).
-- **Dependency Auditing:** Run `npm audit` prior to adding or updating any third-party dependency.
+### Phase 7 (Trust, Safety & Invite Gate)
+- **Invite Code & Handshake Verification:**
+  - Handshake authentication must validate `inviteCode` using constant-time comparison (`crypto.timingSafeEqual`) across all configured codes before allowing socket connection.
+  - Startup validation (`validateStartupConfig`) fails safely without printing secret values if `SERVER_SALT` (< 32 chars) or `INVITE_CODES` (< 16 chars per code) are invalid when `REQUIRE_INVITE` is active.
+  - Dual-tier lockout defense: per-token lockout (5 failed attempts / 15 min) plus a second, looser per-address counter (`INVITE_ADDRESS_LOCKOUT_ATTEMPTS`, default 50 failed attempts / 15 min) that rejects further handshakes with `INVITE_LOCKED_OUT`. Only failed attempts increment the counter; valid codes never trip it. Shared networks (campus Wi-Fi, tunnels, NATs) can raise this limit.
+  - In-memory data structures enforce hard bounds (`MAX_TRACKED_LOCKOUTS`, default 10,000) with oldest-eviction (LRU) to prevent unbounded memory growth under automated rotation attacks.
+  - `sweepExpired()` purges all failed-attempt records older than 15 minutes, including partial attempts that never reached the lockout threshold.
+- **Anonymous Token Hashing & Zero Secret Logging:**
+  - Client tokens are hashed server-side using `HMAC-SHA256` keyed with `SERVER_SALT`.
+  - Raw invite codes, raw client tokens, token hashes, IP addresses, and user notes must **never** be output to standard console logs or persisted in version control.
+- **Multi-Tier Rate Limiting & Connection Caps:**
+  - Per-event token bucket rate limits: generous burst for `ice-candidate` (capacity 30, refill 10/s); strict limits for `join-queue`, `offer`, `answer`, `leave-session`, `report-user`, and `block-user`.
+  - Global socket flood limiter drops excessive traffic and signals disconnect upon sustained abuse.
+  - Sockets-per-address and total server connections are capped in memory (`MAX_SOCKETS_PER_ADDRESS`, `MAX_TOTAL_CONNECTIONS`). Network addresses are used strictly in memory for counting and are never stored or logged.
+- **Reports & Moderation Records:**
+  - Reports are appended to `backend/data/reports.jsonl` with file permissions `0600`. The `backend/data/` directory must remain strictly git-ignored.
+  - File size is capped (`MAX_REPORTS_FILE_SIZE_BYTES`); appends outside the matching path.
+  - User notes are stripped of control characters and capped at 200 characters.
+  - Urgent safety alerts (`urgent_minor_safety`, `urgent_violence_threat`) surface a minimal terminal alert displaying only `category`, `sessionId`, `reportId`, and `timestamp` (never notes or tokens).
+- **Grace Period & Block Synchronicity:**
+  - The server retains the last `sessionId` and partner's `hashedToken` in memory for 120s (`GRACE_PERIOD_MS`) after session end to permit post-call reporting and blocking.
+  - Block enforcement is evaluated bidirectionally in constant time inside `isCompatible` with zero `await` statements.
+  - Automated cooldown triggers only after $\ge 3$ distinct verified partner tokens report an account.
 
 ### Phase 8–9 (Persistence, Admin Dashboard, & Deployment)
 - **Admin JWT Verification:** The backend verifies Supabase Auth JWT tokens and confirms Multi-Factor Authentication (MFA) status on every incoming request to `/admin` telemetry routes.

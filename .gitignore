@@ -16,3 +16,8 @@ node_modules/
 dist/
 build/
 
+# Local data & reports
+backend/data/
+data/
+
+

@@ -66,6 +66,7 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 
 | Event Name | Direction | Payload Schema | Purpose | Status in Code |
 |---|---|---|---|---|
+| `handshake (auth)` | Client -> Server | `{ auth: { inviteCode: string, clientToken: string } }` | Authenticates connection against server invite codes and hashes client token | Implemented (Phase 7a) |
 | `join-queue` | Client -> Server | `{ identity: string, preferences: string[] }` | Enters client into matchmaking queue | Implemented (Phase 4) |
 | `queue-status` | Server -> Client | `{ status: "waiting" \| "rejected", message: string }` | Queue status update or payload rejection reason | Implemented (Phase 4) |
 | `broaden-prompt` | Server -> Client | `{ waitSeconds: number }` | Prompt user to broaden preferences after 30s | Implemented (Phase 5) |
@@ -79,9 +80,9 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 | `ice-candidate` (client emit) | Client -> Server | `{ candidate: RTCIceCandidateInit }` | Client sends local ICE candidate | Implemented (Phase 2) |
 | `ice-candidate` (forwarded) | Server -> Partner | `{ sessionId: string, candidate: RTCIceCandidateInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
 | `leave-session` | Client -> Server | `{}` | Leaves active call or cancels waiting queue (Next re-enqueues client) | Implemented (Phase 3 & 5) |
-| `partner-left` | Server -> Client | `{ reason: "left" \| "disconnected" }` | Notifies remaining peer that partner left | Implemented (Phase 2) |
-| `report-user` | Client -> Server | `{ sessionId: string, reason: string }` | Flags current partner for moderation | Planned (Phase 7) |
-| `block-user` | Client -> Server | `{ sessionId: string }` | Blocks current partner from rematching | Planned (Phase 7) |
+| `partner-left` | Server -> Client | `{ reason: "left" \| "disconnected" \| "blocked" }` | Notifies remaining peer that partner left or was blocked | Implemented (Phase 2 & 7a) |
+| `report-user` | Client -> Server | `{ sessionId: string, category: string, note?: string }` | Reports session partner for safety violation (active or 120s grace period) | Implemented (Phase 7a) |
+| `block-user` | Client -> Server | `{ sessionId: string }` | Blocks session partner's token in memory for 24h and dissolves active call immediately | Implemented (Phase 7a) |
 
 ---
 
@@ -102,6 +103,40 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 ### 4.3 Phase 6b Deferral Note
 - Phase 6b (TURN account setup and cross-network tunnel testing) is deferred since no free, no-card TURN provider has been chosen.
 - The system operates in STUN-only mode for now, to be revisited only if real users cannot connect.
+
+---
+
+## 5. Trust, Safety & Abuse Control Architecture (Phase 7a)
+
+### 5.1 Invite-Code Gate & Handshake Security
+- Gated behind `INVITE_CODES` in `backend/.env`.
+- Validation is evaluated at the Socket.IO connection handshake level before enrolling sockets.
+- **Timing-Safe Comparison:** `validateInviteCode` uses `crypto.timingSafeEqual` over fixed-length SHA-256 digests across all valid codes without early return.
+- **Dual-Tier Lockout Defense:**
+  - *Per-Token Lockout:* 5 failed attempts within 15 minutes locks out `${address}:${clientToken}` with `INVITE_LOCKED_OUT`.
+  - *Per-Address Lockout:* A second, looser counter (`INVITE_ADDRESS_LOCKOUT_ATTEMPTS`, default 50 failed attempts within 15 minutes) rejects all further handshakes from that IP with `INVITE_LOCKED_OUT` to prevent token-rotation bypass attacks. Only failed attempts increment the counter; valid codes never trip it. Shared networks (campus Wi-Fi, tunnels, NATs) can raise this limit via `INVITE_ADDRESS_LOCKOUT_ATTEMPTS`.
+- **Memory Growth & Hard Bounds:**
+  - In-memory maps (`lockouts`, `addressLockouts`, `userBlocks`, `sessionReports`, `verifiedPairings`, `userReportTallies`, `cooldowns`) enforce hard bounds (`MAX_TRACKED_LOCKOUTS`, default 10,000) using oldest-entry LRU eviction (`setWithCap`).
+  - `sweepExpired()` actively purges all failed-attempt records older than 15 minutes, including partial attempts that never reached the lockout threshold.
+- **Startup Protection:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$ chars) and `INVITE_CODES` ($\ge 16$ chars per code) on process startup, exiting safely without printing secrets.
+
+### 5.2 Anonymous Client Token
+- Generated in the browser (`crypto.randomUUID()`) and stored in `localStorage` under `shuup_client_token`.
+- Sent strictly via `auth: { clientToken }` at handshake.
+- Hashed server-side via `HMAC-SHA256` keyed with `SERVER_SALT`. Raw tokens are never logged or stored.
+
+### 5.3 Reporting, Blocking & Last-Partner Grace Window
+- **Zero Trust:** Clients emit `report-user` or `block-user` with `sessionId` only; the server derives the partner token from server memory.
+- **Grace Window:** Server stores the last `sessionId` and partner's `hashedToken` for 120 seconds after a session ends (leave, Next, partner-left) so users can report or block a partner who quickly disconnected.
+- **Blocking:** Bidirectional block check evaluated inside `isCompatible` in constant time without `await`. Blocks persist for 24 hours with an LRU cap of 100 per user.
+- **Reports File:** Appended to `backend/data/reports.jsonl` (mode `0600`, git-ignored, 10MB size cap). Notes are stripped of control characters and capped at 200 characters.
+
+### 5.4 Multi-Tier Rate Limiting & Cooldown
+- **Token Bucket Limiting:**
+  - `ice-candidate`: generous bucket capacity (30 tokens, refill 10/s) accommodating initial gathering bursts.
+  - Strict limits for `join-queue`, `offer`, `answer`, `report-user`, and `block-user`.
+  - Global flood limit drops excessive events and disconnects sockets on sustained abuse.
+- **Automated Cooldown:** If a token accumulates reports from $\ge 3$ distinct reporter tokens who shared verified sessions within 1 hour, that token is temporarily suspended from matchmaking for 1 hour.
 
 ---
 

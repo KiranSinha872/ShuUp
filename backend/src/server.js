@@ -6,12 +6,17 @@ import {
   MATCH_WITH_ANYONE,
   PING_INTERVAL,
   PING_TIMEOUT,
-  GHOST_SWEEP_INTERVAL_MS
+  GHOST_SWEEP_INTERVAL_MS,
+  validateStartupConfig
 } from "./config.js";
 import { validateJoinPayload } from "./compatibility.js";
 import { createMatchmaker } from "./matchmaker.js";
 import { setupSignaling } from "./signaling.js";
 import { createIceManager } from "./ice.js";
+import { createSafetyManager } from "./safety.js";
+
+// Validate required config on startup (exits safely if invalid, no secrets logged)
+validateStartupConfig();
 
 if (MATCH_WITH_ANYONE) {
   console.warn("[WARNING] MATCH_WITH_ANYONE feature flag is enabled. Preference matching is bypassed.");
@@ -38,12 +43,29 @@ const io = new Server(server, {
     methods: ["GET", "POST"]
   },
   pingInterval: PING_INTERVAL,
-  pingTimeout: PING_TIMEOUT
+  pingTimeout: PING_TIMEOUT,
+  maxHttpBufferSize: 100_000 // 100 KB payload limit to prevent memory exhaustion
 });
 
-const matchmaker = createMatchmaker({ matchWithAnyone: MATCH_WITH_ANYONE });
+const safetyManager = createSafetyManager();
+const matchmaker = createMatchmaker({
+  matchWithAnyone: MATCH_WITH_ANYONE,
+  isBlocked: safetyManager.isBlocked
+});
 const iceManager = createIceManager();
 iceManager.warmCache();
+
+// Handshake authentication middleware
+io.use((socket, next) => {
+  const result = safetyManager.authenticateHandshake(socket.handshake);
+  if (!result.ok) {
+    return next(new Error(result.error));
+  }
+  socket.hashedToken = result.hashedToken;
+  socket.clientAddress = result.address;
+  socket.limiter = safetyManager.createSocketLimiter();
+  next();
+});
 
 // Track reported connection-stats (capped to avoid memory bloat)
 const reportedStats = new Set();
@@ -97,6 +119,9 @@ async function handleMatchedSession(sessionId, callerId, calleeId) {
     return;
   }
 
+  // Record verified pairing for cooldown legitimacy check
+  safetyManager.recordSessionPairing(callerSocket.hashedToken, calleeSocket.hashedToken);
+
   const { iceServers, iceTransportPolicy } = iceResult;
 
   callerSocket.join(`session:${sessionId}`);
@@ -116,7 +141,7 @@ async function handleMatchedSession(sessionId, callerId, calleeId) {
   });
 }
 
-export function startGhostSweep(ioInstance, matchmakerInstance, intervalMs = GHOST_SWEEP_INTERVAL_MS) {
+export function startGhostSweep(ioInstance, matchmakerInstance, safetyInstance = safetyManager, intervalMs = GHOST_SWEEP_INTERVAL_MS) {
   const timer = setInterval(() => {
     const isConnected = (id) => Boolean(ioInstance.sockets.sockets.get(id)?.connected);
     const orphaned = matchmakerInstance.sweepGhosts(isConnected);
@@ -127,13 +152,14 @@ export function startGhostSweep(ioInstance, matchmakerInstance, intervalMs = GHO
         socket.emit("partner-left", { reason: "disconnected" });
       }
     }
+    safetyInstance.sweepExpired();
   }, intervalMs);
   timer.unref();
   return timer;
 }
 
-// Start periodic ghost sweep
-startGhostSweep(io, matchmaker);
+// Start periodic ghost and safety sweep
+startGhostSweep(io, matchmaker, safetyManager);
 
 function isValidEmptyPayload(payload) {
   return !payload || (typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length === 0);
@@ -142,8 +168,32 @@ function isValidEmptyPayload(payload) {
 io.on("connection", (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);
 
+  // Rate-limiting middleware: inspect event before dispatch
+  socket.use(([event], next) => {
+    if (socket.limiter) {
+      const check = socket.limiter.checkEvent(event);
+      if (!check.allow) {
+        if (check.disconnect) {
+          console.warn(`[Safety] Disconnecting flooding socket ${socket.id}`);
+          socket.disconnect(true);
+        }
+        return; // Drop excessive event
+      }
+    }
+    next();
+  });
+
   // User requests to enter matchmaking queue
   socket.on("join-queue", (payload) => {
+    // Check if user is currently under cooldown
+    if (safetyManager.checkCooldown(socket.hashedToken)) {
+      socket.emit("queue-status", {
+        status: "rejected",
+        message: "Account temporarily suspended due to safety reports."
+      });
+      return;
+    }
+
     const validation = validateJoinPayload(payload);
 
     if (!validation.valid) {
@@ -164,7 +214,8 @@ io.on("connection", (socket) => {
       {
         socketId: socket.id,
         identity: validation.identity,
-        preferences: validation.preferences
+        preferences: validation.preferences,
+        hashedToken: socket.hashedToken
       },
       isSocketConnected,
       onBroadenPrompt
@@ -221,10 +272,97 @@ io.on("connection", (socket) => {
     if (result.wasInSession) {
       socket.leave(`session:${result.sessionId}`);
       const partnerSocket = io.sockets.sockets.get(result.partnerId);
+
+      // Set grace period so partner or leaver can still report/block within 120s
+      if (partnerSocket && partnerSocket.hashedToken) {
+        safetyManager.setGracePeriod(socket.id, result.sessionId, partnerSocket.hashedToken);
+        safetyManager.setGracePeriod(result.partnerId, result.sessionId, socket.hashedToken);
+      }
+
       if (partnerSocket) {
         partnerSocket.leave(`session:${result.sessionId}`);
         partnerSocket.emit("partner-left", { reason: "left" });
       }
+    }
+  });
+
+  // Client reports user for safety violations
+  socket.on("report-user", async (payload, callback) => {
+    if (!payload || typeof payload !== "object") return;
+    const { sessionId, category, note } = payload;
+    if (typeof sessionId !== "string" || typeof category !== "string") return;
+
+    let reportedHashedToken = null;
+    const session = matchmaker.getActiveSession(sessionId);
+
+    if (session && (session.callerId === socket.id || session.calleeId === socket.id)) {
+      reportedHashedToken = session.callerId === socket.id ? session.calleeToken : session.callerToken;
+    } else {
+      const grace = safetyManager.getGraceRecord(socket.id);
+      if (grace && grace.sessionId === sessionId) {
+        reportedHashedToken = grace.partnerHashedToken;
+      }
+    }
+
+    if (!reportedHashedToken) {
+      if (typeof callback === "function") callback({ ok: false, error: "INVALID_SESSION" });
+      return;
+    }
+
+    const result = await safetyManager.recordReport({
+      sessionId,
+      category,
+      rawNote: note,
+      reporterHashedToken: socket.hashedToken,
+      reportedHashedToken
+    });
+
+    if (typeof callback === "function") {
+      callback(result);
+    }
+  });
+
+  // Client blocks user
+  socket.on("block-user", (payload, callback) => {
+    if (!payload || typeof payload !== "object") return;
+    const { sessionId } = payload;
+    if (typeof sessionId !== "string") return;
+
+    let partnerSocketId = null;
+    let partnerHashedToken = null;
+    const session = matchmaker.getActiveSession(sessionId);
+
+    if (session && (session.callerId === socket.id || session.calleeId === socket.id)) {
+      partnerSocketId = session.callerId === socket.id ? session.calleeId : session.callerId;
+      partnerHashedToken = session.callerId === socket.id ? session.calleeToken : session.callerToken;
+    } else {
+      const grace = safetyManager.getGraceRecord(socket.id);
+      if (grace && grace.sessionId === sessionId) {
+        partnerHashedToken = grace.partnerHashedToken;
+      }
+    }
+
+    if (!partnerHashedToken) {
+      if (typeof callback === "function") callback({ ok: false, error: "INVALID_SESSION" });
+      return;
+    }
+
+    // Record block in memory
+    safetyManager.recordBlock(socket.hashedToken, partnerHashedToken);
+
+    // If active session: dissolve immediately and notify partner
+    if (partnerSocketId) {
+      matchmaker.leaveSession(socket.id, { recordRecent: false });
+      const partnerSocket = io.sockets.sockets.get(partnerSocketId);
+      if (partnerSocket) {
+        partnerSocket.leave(`session:${sessionId}`);
+        partnerSocket.emit("partner-left", { reason: "blocked" });
+      }
+      socket.leave(`session:${sessionId}`);
+    }
+
+    if (typeof callback === "function") {
+      callback({ ok: true });
     }
   });
 
@@ -263,15 +401,23 @@ io.on("connection", (socket) => {
   // Handle client disconnect
   socket.on("disconnect", (reason) => {
     console.log(`[Socket] Disconnected: ${socket.id} (${reason})`);
+    safetyManager.releaseConnection(socket.clientAddress);
+
     const result = matchmaker.disconnectUser(socket.id);
 
     if (result.wasInSession) {
       const partnerSocket = io.sockets.sockets.get(result.partnerId);
+      if (partnerSocket && partnerSocket.hashedToken) {
+        safetyManager.setGracePeriod(result.partnerId, result.sessionId, socket.hashedToken);
+      }
+
       if (partnerSocket) {
         partnerSocket.leave(`session:${result.sessionId}`);
         partnerSocket.emit("partner-left", { reason: "disconnected" });
       }
     }
+
+    safetyManager.clearGraceRecord(socket.id);
   });
 });
 

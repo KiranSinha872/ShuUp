@@ -34,12 +34,13 @@ Shuup is a browser-based, one-to-one random video chat web application offering 
    - Backend verification of the admin JWT on every administrative request.
 
 ## 4. Safety, Privacy & Trust (Single Source of Truth)
-- **Invite-Code Gate:** Early testing is gated behind an invite code checked against an environment variable (Phase 7), migrated to Supabase in Phase 8.
-- **Strict Minor Protection:** Unrestricted stranger video is disabled for minors.
+- **Invite-Code Gate:** Early testing is gated behind an invite code checked strictly on the server during the Socket.IO handshake against an environment variable (Phase 7a), migrated to Supabase in Phase 8.
+- **Strict Minor Protection:** Unrestricted stranger video is disabled for minors. Private testing is limited to invited adults.
 - **Report & Block:**
-   - Accessible at all times during a call.
-   - Reporting records the temporary session ID, reason, and timestamp.
-   - Blocking permanently breaks the current call and prevents rematching within the same runtime session.
+   - Accessible during every call and for 120 seconds after call end via a grace period window.
+   - Reporting supports 5 fixed categories including urgent classifications for minor safety and violent threats. Appended to `backend/data/reports.jsonl` with sanitized notes.
+   - Blocking immediately dissolves the call and excludes partner tokens for 24 hours within the synchronous matching check.
+   - Automated cooldown temporarily suspends users accumulating reports from $\ge 3$ distinct verified partners.
 - **Anonymous Telemetry Only:**
    - Logged session data includes only: `session_id`, `started_at`, `ended_at`, `duration_seconds`, `connection_type` (direct P2P or TURN relay).
    - **Never collected or stored:** IP addresses, real names, video/audio recordings, or media frames.

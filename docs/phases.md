@@ -73,13 +73,21 @@ Development proceeds sequentially through 9 distinct phases. Each milestone must
 ---
 
 ### Phase 7: Trust, Safety & Invite Gate
-- **Scope:**
-  - Add invite-code gate (checked against `INVITE_CODES` environment variable).
-  - Implement first-visit 18+ confirmation and Community Rules modal.
-  - Implement in-call `Report` and `Block` controls with server-side recording.
-  - Apply socket event rate-limiting to prevent spamming.
+- **Phase 7a (Implemented, Awaiting Verification):**
+  - **Handshake Invite Gate:** Server-side validation via `crypto.timingSafeEqual` against `INVITE_CODES` with per-token+address lockout (5 attempts in 15 mins).
+  - **Token Hashing & Zero Secret Logging:** Client token stored in `localStorage`, hashed via `HMAC-SHA256` with `SERVER_SALT`. Zero logging of raw tokens, codes, or notes.
+  - **Startup Safeguards:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) and `INVITE_CODES` ($\ge 16$) on startup, exiting cleanly without logging secrets.
+  - **Multi-Tier Rate Limiting:** Token-bucket rate limits per event type (30-candidate ICE burst; strict queue/safety limits) and global flood limiter.
+  - **Grace Period & Abuse Controls:** 120s post-call grace window for reporting/blocking; 24h in-memory bidirectional block check inside `isCompatible`; automated 1h cooldown after $\ge 3$ distinct verified partner reports.
+  - **Reports Storage:** Appends sanitized incident records to `backend/data/reports.jsonl` (file mode `0600`, git-ignored, 10MB cap); urgent categories trigger high-visibility terminal alert.
+  - **Minimal Client Integration:** Bare invite-code input screen preceding camera/preview; Start button disabled until media is ready.
+- **Phase 7b (Planned):**
+  - Consent screen: Explicit 18+ declaration and Community Rules agreement checkboxes before media activation.
+  - In-call `Report` and `Block` UI buttons and modal dialog.
+  - Operational moderation protocol documentation (`docs/moderation-procedure.md`).
+  - Full manual two-browser verification across invite, report, block, and cooldown flows.
 - **Acceptance Check:**
-  - Works with two real browsers: Unauthorized users are blocked by the invite gate; authorized users can report and block partners, ensuring blocked partners cannot be rematched.
+  - Works with real browsers: Handshake rejects unauthorized or locked-out connections; authorized users enter with client token; reports append to reports.jsonl; blocked partners cannot be rematched.
 
 ---
 
