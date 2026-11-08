@@ -226,7 +226,7 @@ export function createSafetyManager(options = {}) {
     addrEntry.attempts += 1;
     if (addrEntry.attempts >= inviteAddressLockoutAttempts) {
       addrEntry.lockedUntil = now + inviteLockoutMs;
-      logger.warn(`[Auth] Address handshake lockout applied for IP: ${address}`);
+      logger.warn("[Auth] Address handshake lockout threshold reached");
     }
     setWithCap(addressLockouts, address, addrEntry, maxTrackedAddressLockouts);
   }
@@ -386,23 +386,48 @@ export function createSafetyManager(options = {}) {
     }
   }
 
+  const maxTrackedGraceRecords = options.maxTrackedGraceRecords ?? 2_000;
+
   function setGracePeriod(socketId, sessionId, partnerHashedToken) {
+    if (!socketId || !sessionId || !partnerHashedToken) return;
     const expiresAt = timeProvider() + (options.gracePeriodMs ?? GRACE_PERIOD_MS);
-    graceRecords.set(socketId, { sessionId, partnerHashedToken, expiresAt });
+    const key = `${socketId}:${sessionId}`;
+    setWithCap(graceRecords, key, { socketId, sessionId, partnerHashedToken, expiresAt }, maxTrackedGraceRecords);
   }
 
-  function getGraceRecord(socketId) {
-    const entry = graceRecords.get(socketId);
+  function getGraceRecord(socketId, sessionId) {
+    if (!sessionId) {
+      let latest = null;
+      for (const [key, entry] of graceRecords.entries()) {
+        if (key.startsWith(`${socketId}:`) && timeProvider() <= entry.expiresAt) {
+          if (!latest || entry.expiresAt > latest.expiresAt) {
+            latest = entry;
+          }
+        }
+      }
+      return latest;
+    }
+
+    const key = `${socketId}:${sessionId}`;
+    const entry = graceRecords.get(key);
     if (!entry) return null;
     if (timeProvider() > entry.expiresAt) {
-      graceRecords.delete(socketId);
+      graceRecords.delete(key);
       return null;
     }
     return entry;
   }
 
-  function clearGraceRecord(socketId) {
-    graceRecords.delete(socketId);
+  function clearGraceRecord(socketId, sessionId) {
+    if (sessionId) {
+      graceRecords.delete(`${socketId}:${sessionId}`);
+    } else {
+      for (const [key, entry] of graceRecords.entries()) {
+        if (entry.socketId === socketId) {
+          graceRecords.delete(key);
+        }
+      }
+    }
   }
 
   function recordBlock(blockerHashedToken, partnerHashedToken) {

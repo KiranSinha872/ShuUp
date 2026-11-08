@@ -298,7 +298,7 @@ io.on("connection", (socket) => {
     if (session && (session.callerId === socket.id || session.calleeId === socket.id)) {
       reportedHashedToken = session.callerId === socket.id ? session.calleeToken : session.callerToken;
     } else {
-      const grace = safetyManager.getGraceRecord(socket.id);
+      const grace = safetyManager.getGraceRecord(socket.id, sessionId);
       if (grace && grace.sessionId === sessionId) {
         reportedHashedToken = grace.partnerHashedToken;
       }
@@ -336,7 +336,7 @@ io.on("connection", (socket) => {
       partnerSocketId = session.callerId === socket.id ? session.calleeId : session.callerId;
       partnerHashedToken = session.callerId === socket.id ? session.calleeToken : session.callerToken;
     } else {
-      const grace = safetyManager.getGraceRecord(socket.id);
+      const grace = safetyManager.getGraceRecord(socket.id, sessionId);
       if (grace && grace.sessionId === sessionId) {
         partnerHashedToken = grace.partnerHashedToken;
       }

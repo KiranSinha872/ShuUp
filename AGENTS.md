@@ -29,3 +29,12 @@ Take the first option that fully works:
 
 Never cut: validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs, anything the user asked for.
 
+## Secrets
+
+- Never run `grep`, `cat`, `rg`, `find -exec`, or any recursive search that can touch `.env` files.
+- Never pass `.` as the search root to `grep -r`.
+- For searches, use only `git grep` (for tracked files) and `git ls-files --others --exclude-standard` filtered to exclude `.env*` files (for untracked files).
+- If checking whether an environment variable exists, inspect only its variable name with a count that prints no value.
+- `backend/.env`, `frontend/.env`, and `backend/data/` must never be read, listed, searched, or printed under any circumstances.
+
+

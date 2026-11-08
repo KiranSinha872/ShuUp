@@ -15,20 +15,23 @@ Shuup/
 │   ├── tech-stack-rules.md         # Implementation, technical, and security guidelines
 │   ├── phases.md                   # 9-step development phases with acceptance criteria
 │   ├── design.md                   # Visual system, layout, and component design specs
-│   └── moderation-procedure.md     # [Planned Phase 7b] Operational moderation and incident response runbook
+│   └── moderation-procedure.md     # Operational moderation, ban procedure, and incident response runbook
 ├── frontend/                       # Vite + React client application (Plain JavaScript)
 │   ├── .env.example                # Example client variables (e.g., VITE_BACKEND_URL)
 │   ├── .gitignore                  # Client ignore (node_modules, .env*, dist)
-│   ├── package.json                # Frontend package dependencies and build scripts
+│   ├── package.json                # Frontend package dependencies, build scripts, and node --test
 │   ├── vite.config.js              # Vite dev server and build configuration (port 3000)
 │   ├── index.html                  # Single-page application HTML entry mount
-│   └── src/
-│       ├── main.jsx                # React root bootstrap and DOM rendering
-│       ├── App.jsx                 # Primary app state machine (invite gate, idle, waiting, matched call views)
-│       ├── webrtc.js               # WebRTC peer connection manager (STUN, streams, ICE candidate buffering)
-│       ├── App.css                 # [Planned Phase 6+] Split-screen and responsive design styling
-│       ├── components/             # [Planned Phase 6+] Modular UI components (VideoGrid, Controls, Modals)
-│       └── pages/                  # [Planned Phase 8] Protected /admin route
+│   ├── src/
+│   │   ├── main.jsx                # React root bootstrap and DOM rendering
+│   │   ├── App.jsx                 # Primary app state machine (invite gate, consent, idle, waiting, matched call views)
+│   │   ├── webrtc.js               # WebRTC peer connection manager (STUN, streams, ICE candidate buffering)
+│   │   ├── safety-helpers.js       # Pure safety helper functions (validation, mapping, countdown)
+│   │   ├── App.css                 # [Planned Phase 6+] Split-screen and responsive design styling
+│   │   ├── components/             # Modular UI components (InviteGate, ConsentGate, ReportModal, BlockConfirmModal, PreviousPartnerNotice)
+│   │   └── pages/                  # [Planned Phase 8] Protected /admin route
+│   └── test/
+│       └── safety-helpers.test.js  # Frontend unit tests for safety helpers and consent logic
 └── backend/                        # Plain Node.js HTTP + Socket.IO server (No Express)
     ├── .env.example                # Example server variables (PORT, CORS_ORIGIN, INVITE_CODES, SERVER_SALT)
     ├── .gitignore                  # Backend ignore (node_modules, .env*, data/)

@@ -428,6 +428,7 @@ test("Phase 7a: Last-Partner Grace Window & Block Enforcement", async (t) => {
   await t.test("grace record holds partner for 120s after session ends", () => {
     safety.setGracePeriod("socket-1", "session-xyz", "token-partner-hash");
     assert.deepEqual(safety.getGraceRecord("socket-1"), {
+      socketId: "socket-1",
       sessionId: "session-xyz",
       partnerHashedToken: "token-partner-hash",
       expiresAt: currentTime + 120_000
@@ -436,6 +437,54 @@ test("Phase 7a: Last-Partner Grace Window & Block Enforcement", async (t) => {
     // Advance clock by 121 seconds
     currentTime += 121_000;
     assert.equal(safety.getGraceRecord("socket-1"), null);
+  });
+
+  await t.test("disconnect removes socket grace records, leaves other sockets untouched, and partner can still report", () => {
+    // Session between socket-A and socket-B
+    safety.setGracePeriod("socket-A", "session-AB", "hash-B");
+    safety.setGracePeriod("socket-B", "session-AB", "hash-A");
+
+    // Also socket-C has an unrelated ended session
+    safety.setGracePeriod("socket-C", "session-CD", "hash-D");
+
+    // socket-A disconnects -> clearGraceRecord("socket-A")
+    safety.clearGraceRecord("socket-A");
+
+    // All records for socket-A must be deleted
+    assert.equal(safety.getGraceRecord("socket-A", "session-AB"), null);
+    assert.equal(safety.getGraceRecord("socket-A"), null);
+
+    // Other sockets' records must remain untouched
+    const socketCRecord = safety.getGraceRecord("socket-C", "session-CD");
+    assert.ok(socketCRecord);
+    assert.equal(socketCRecord.partnerHashedToken, "hash-D");
+
+    // The partner (socket-B) of disconnected user A can still retrieve and report user A within the window
+    const partnerBRecord = safety.getGraceRecord("socket-B", "session-AB");
+    assert.ok(partnerBRecord);
+    assert.equal(partnerBRecord.partnerHashedToken, "hash-A");
+  });
+
+  await t.test("grace records preserved per ended session across multiple calls", () => {
+    safety.setGracePeriod("socket-1", "session-1", "token-partner-1");
+    // User matches and ends a second session within 30s
+    currentTime += 30_000;
+    safety.setGracePeriod("socket-1", "session-2", "token-partner-2");
+
+    // Both ended sessions must be retrievable by sessionId
+    const grace1 = safety.getGraceRecord("socket-1", "session-1");
+    const grace2 = safety.getGraceRecord("socket-1", "session-2");
+
+    assert.ok(grace1, "session-1 grace record must not be overwritten by session-2");
+    assert.equal(grace1.partnerHashedToken, "token-partner-1");
+    assert.ok(grace2, "session-2 grace record must exist");
+    assert.equal(grace2.partnerHashedToken, "token-partner-2");
+
+    // Advance clock past session-1 expiry (session 1 expiresAt + 1)
+    currentTime = grace1.expiresAt + 1;
+    assert.equal(safety.getGraceRecord("socket-1", "session-1"), null);
+    // session-2 was created 30s later -> still active!
+    assert.ok(safety.getGraceRecord("socket-1", "session-2"));
   });
 
   await t.test("block enforcement in both directions and oldest eviction", () => {
@@ -613,6 +662,52 @@ test("Phase 7a: Reporting, Sanitization, Cooldown & Zero Leak Audit", async (t) 
       assert.doesNotMatch(line, /192\.168\./);
       assert.doesNotMatch(line, /127\.0\.0\.1/);
     }
+  });
+
+  await t.test("log audit: zero network address in stdout/stderr during lockout, rejection and cap limits", () => {
+    const logs = [];
+    const testLogger = {
+      warn: (msg) => logs.push(String(msg)),
+      log: (msg) => logs.push(String(msg)),
+      error: (msg) => logs.push(String(msg))
+    };
+
+    const auditSafety = createSafetyManager({
+      logger: testLogger,
+      inviteCodes: ["1234567890abcdef"],
+      serverSalt: "0123456789abcdef0123456789abcdef0123456789abcdef",
+      requireInvite: true,
+      maxSocketsPerAddress: 1,
+      inviteAddressLockoutAttempts: 3,
+      inviteLockoutAttempts: 2
+    });
+
+    const testIP1 = "198.51.100.42";
+    const testIP2 = "203.0.113.19";
+    const testIP3 = "2001:db8::8a2e:370:7334";
+
+    // 1. Trigger token lockout
+    auditSafety.authenticateHandshake({ address: testIP1, auth: { inviteCode: "bad", clientToken: "token-lock-user" } });
+    auditSafety.authenticateHandshake({ address: testIP1, auth: { inviteCode: "bad", clientToken: "token-lock-user" } });
+
+    // 2. Trigger address lockout
+    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-1" } });
+    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-2" } });
+    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-3" } });
+
+    // 3. Trigger connection cap rejection
+    auditSafety.authenticateHandshake({ address: testIP3, auth: { inviteCode: "1234567890abcdef", clientToken: "token-cap-1" } });
+    auditSafety.authenticateHandshake({ address: testIP3, auth: { inviteCode: "1234567890abcdef", clientToken: "token-cap-2" } });
+
+    const combinedLog = logs.join("\n");
+    // Assert no IPv4 pattern
+    assert.doesNotMatch(combinedLog, /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/);
+    // Assert no IPv6 pattern
+    assert.doesNotMatch(combinedLog, /\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b/);
+    // Explicitly assert test IPs never appear
+    assert.equal(combinedLog.includes(testIP1), false);
+    assert.equal(combinedLog.includes(testIP2), false);
+    assert.equal(combinedLog.includes(testIP3), false);
   });
 
   // Cleanup tmp dir

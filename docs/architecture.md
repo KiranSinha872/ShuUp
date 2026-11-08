@@ -81,8 +81,8 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 | `ice-candidate` (forwarded) | Server -> Partner | `{ sessionId: string, candidate: RTCIceCandidateInit }` | Relayed to stored partner with session verification | Implemented (Phase 3) |
 | `leave-session` | Client -> Server | `{}` | Leaves active call or cancels waiting queue (Next re-enqueues client) | Implemented (Phase 3 & 5) |
 | `partner-left` | Server -> Client | `{ reason: "left" \| "disconnected" \| "blocked" }` | Notifies remaining peer that partner left or was blocked | Implemented (Phase 2 & 7a) |
-| `report-user` | Client -> Server | `{ sessionId: string, category: string, note?: string }` | Reports session partner for safety violation (active or 120s grace period) | Implemented (Phase 7a) |
-| `block-user` | Client -> Server | `{ sessionId: string }` | Blocks session partner's token in memory for 24h and dissolves active call immediately | Implemented (Phase 7a) |
+| `report-user` | Client -> Server | `{ sessionId: string, category: string, note?: string }` | Reports session partner for safety violation (active or 120s grace period) | Implemented (Phase 7b) |
+| `block-user` | Client -> Server | `{ sessionId: string }` | Blocks session partner's token in memory for 24h and dissolves active call immediately | Implemented (Phase 7b) |
 
 ---
 
@@ -137,6 +137,10 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
   - Strict limits for `join-queue`, `offer`, `answer`, `report-user`, and `block-user`.
   - Global flood limit drops excessive events and disconnects sockets on sustained abuse.
 - **Automated Cooldown:** If a token accumulates reports from $\ge 3$ distinct reporter tokens who shared verified sessions within 1 hour, that token is temporarily suspended from matchmaking for 1 hour.
+
+### 5.5 In-Memory Consent & Disconnect Boundaries
+- **Consent is Browser-Side Only:** The 18+ and P2P consent gate is enforced strictly in the client application before requesting media or allowing queue entry. The server has no user accounts or persistent profiles, and cannot verify whether a client checked the consent boxes; a socket emitting `join-queue` directly is admitted.
+- **Previous-Partner Grace Window Disconnect Invariant:** The 120-second grace window is keyed in server memory by `${socketId}:${sessionId}`. Because socket IDs change upon reconnection and disconnect purges the disconnected socket's grace records, the previous-partner reporting window **does not survive a socket disconnect or page reload**. If connection is lost, the client clears the grace notice and informs the user.
 
 ---
 

@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import { createPeerConnection } from "./webrtc.js";
+import InviteGate from "./components/InviteGate.jsx";
+import ConsentGate from "./components/ConsentGate.jsx";
+import ReportModal from "./components/ReportModal.jsx";
+import BlockConfirmModal from "./components/BlockConfirmModal.jsx";
+import PreviousPartnerNotice from "./components/PreviousPartnerNotice.jsx";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:4000";
 
@@ -25,12 +30,19 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [sessionInfo, setSessionInfo] = useState(null);
 
-  // Invite gate states (Phase 7a: in-memory only, never saved to storage)
+  // Invite & Consent gate states (Phase 7b: in-memory only, never saved to storage)
   const [inviteInput, setInviteInput] = useState("");
   const [isInviteAccepted, setIsInviteAccepted] = useState(false);
+  const [hasConsented, setHasConsented] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [inviteError, setInviteError] = useState("");
   const [isMediaReady, setIsMediaReady] = useState(false);
+
+  // Safety UI states: Report, Block & 120s Grace Period
+  const [previousSessionGrace, setPreviousSessionGrace] = useState(null); // { sessionId, expiresAt }
+  const [reportModal, setReportModal] = useState({ isOpen: false, targetSessionId: null, label: "partner" });
+  const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
+  const [isBlocking, setIsBlocking] = useState(false);
 
   // User matching attributes (defaults per brief)
   const [identity, setIdentity] = useState("Prefer not to say");
@@ -75,7 +87,7 @@ export default function App() {
     } catch (err) {
       setIsMediaReady(false);
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        setErrorMessage("Camera or microphone permission was denied. Please allow access in browser settings.");
+        setErrorMessage("Camera or microphone permission was denied. Allow access in your browser settings, then reload the page.");
       } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
         setErrorMessage("No camera or microphone found on this device.");
       } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
@@ -174,6 +186,12 @@ export default function App() {
           iceDisconnectTimerRef.current = null;
         }
         if (uiStateRef.current === "matched") {
+          if (currentSessionIdRef.current) {
+            setPreviousSessionGrace({
+              sessionId: currentSessionIdRef.current,
+              expiresAt: Date.now() + 120_000
+            });
+          }
           if (socketRef.current) {
             socketRef.current.emit("leave-session", {});
           }
@@ -310,6 +328,13 @@ export default function App() {
       isSubmittingRef.current = false;
       setShowBroadenBanner(false);
 
+      if (currentSessionIdRef.current) {
+        setPreviousSessionGrace({
+          sessionId: currentSessionIdRef.current,
+          expiresAt: Date.now() + 120_000
+        });
+      }
+
       setStatus(`Partner left (${reason}). Ready to start again.`);
       setSessionInfo(null);
       currentSessionIdRef.current = null;
@@ -357,6 +382,14 @@ export default function App() {
       setUiState("idle");
       uiStateRef.current = "idle";
       setStatus("Connection lost. Reconnecting...");
+
+      // Clear previous-partner notice if active, since socket ID changes on reconnect and old grace records are cleared
+      setPreviousSessionGrace((prev) => {
+        if (prev) {
+          setErrorMessage("Connection was lost; the report window for your previous call is no longer available.");
+        }
+        return null;
+      });
     });
   }
 
@@ -385,7 +418,6 @@ export default function App() {
       setIsInviteAccepted(true);
       setInviteError("");
       wireSocketEvents(socket);
-      startMedia();
     });
 
     socket.on("connect_error", (err) => {
@@ -491,6 +523,13 @@ export default function App() {
     setIsSubmitting(false);
     isSubmittingRef.current = false;
 
+    if (currentSessionIdRef.current) {
+      setPreviousSessionGrace({
+        sessionId: currentSessionIdRef.current,
+        expiresAt: Date.now() + 120_000
+      });
+    }
+
     if (socketRef.current) {
       socketRef.current.emit("leave-session", {});
     }
@@ -521,6 +560,13 @@ export default function App() {
     }
     setShowBroadenBanner(false);
 
+    if (currentSessionIdRef.current) {
+      setPreviousSessionGrace({
+        sessionId: currentSessionIdRef.current,
+        expiresAt: Date.now() + 120_000
+      });
+    }
+
     socketRef.current.emit("leave-session", {});
 
     if (remoteVideoRef.current) {
@@ -541,6 +587,57 @@ export default function App() {
     handleStart();
   }
 
+  function handleConsentGranted() {
+    setHasConsented(true);
+    startMedia();
+  }
+
+  function handleOpenReport(targetSessionId, label = "partner") {
+    setReportModal({
+      isOpen: true,
+      targetSessionId,
+      label
+    });
+  }
+
+  function handleSubmitReport(payload, callback) {
+    if (!socketRef.current || !isConnected) {
+      if (typeof callback === "function") callback({ ok: false, error: "NOT_CONNECTED" });
+      return;
+    }
+    socketRef.current.emit("report-user", payload, (response) => {
+      if (response && response.ok) {
+        if (previousSessionGrace && previousSessionGrace.sessionId === payload.sessionId) {
+          setPreviousSessionGrace(null);
+        }
+      }
+      if (typeof callback === "function") callback(response);
+    });
+  }
+
+  function handleOpenBlockModal() {
+    setIsBlockModalOpen(true);
+  }
+
+  function handleBlockConfirm() {
+    const activeSessionId = currentSessionIdRef.current;
+    if (!activeSessionId || !socketRef.current) {
+      setIsBlockModalOpen(false);
+      return;
+    }
+    setIsBlocking(true);
+    socketRef.current.emit("block-user", { sessionId: activeSessionId }, () => {
+      setIsBlocking(false);
+      setIsBlockModalOpen(false);
+      setPreviousSessionGrace({
+        sessionId: activeSessionId,
+        expiresAt: Date.now() + 120_000
+      });
+      handleLeave();
+      setStatus("Partner blocked. You will not be matched with them again in this session.");
+    });
+  }
+
   function handleBroadenAccept() {
     setShowBroadenBanner(false);
     if (socketRef.current && uiStateRef.current === "waiting") {
@@ -553,48 +650,26 @@ export default function App() {
     setShowBroadenBanner(false);
   }
 
-  // Bare invite screen when not authenticated (Phase 7a)
+  // Gate 1: Invite verification
   if (!isInviteAccepted) {
     return (
-      <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem 1.5rem", maxWidth: "450px", margin: "4rem auto", textAlign: "center" }}>
-        <h2 style={{ marginBottom: "0.5rem" }}>Shuup Private Access</h2>
-        <p style={{ color: "#64748b", fontSize: "0.95rem", marginBottom: "1.5rem" }}>
-          Shuup is currently in private testing for invited adult testers only. Please enter your invite code to continue.
-        </p>
+      <main style={{ fontFamily: "system-ui, sans-serif", padding: "1.5rem" }}>
+        <InviteGate
+          inviteInput={inviteInput}
+          setInviteInput={setInviteInput}
+          isAuthenticating={isAuthenticating}
+          inviteError={inviteError}
+          onSubmit={handleInviteSubmit}
+        />
+      </main>
+    );
+  }
 
-        {inviteError && (
-          <div style={{ padding: "0.75rem 1rem", backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: "6px", marginBottom: "1rem", textAlign: "left" }}>
-            <strong>Access Denied:</strong> {inviteError}
-          </div>
-        )}
-
-        <form onSubmit={handleInviteSubmit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <input
-            type="text"
-            value={inviteInput}
-            onChange={(e) => setInviteInput(e.target.value)}
-            placeholder="Enter invite code"
-            disabled={isAuthenticating}
-            required
-            style={{ padding: "0.75rem 1rem", fontSize: "1rem", borderRadius: "6px", border: "1px solid #cbd5e1" }}
-          />
-          <button
-            type="submit"
-            disabled={isAuthenticating || !inviteInput.trim()}
-            style={{
-              padding: "0.75rem 1.5rem",
-              fontSize: "1rem",
-              fontWeight: "600",
-              color: "#ffffff",
-              backgroundColor: isAuthenticating ? "#94a3b8" : "#2563eb",
-              border: "none",
-              borderRadius: "6px",
-              cursor: isAuthenticating ? "default" : "pointer"
-            }}
-          >
-            {isAuthenticating ? "Verifying..." : "Continue"}
-          </button>
-        </form>
+  // Gate 2: Consent and tester rules (in-memory per page load)
+  if (!hasConsented) {
+    return (
+      <main style={{ fontFamily: "system-ui, sans-serif", padding: "1.5rem" }}>
+        <ConsentGate onConsentGranted={handleConsentGranted} />
       </main>
     );
   }
@@ -604,12 +679,21 @@ export default function App() {
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", padding: "1.5rem", maxWidth: "900px", margin: "0 auto" }}>
-      <h2>Shuup (Phase 7a: Trust & Safety Baseline)</h2>
+      <h2>Shuup (Phase 7b: Trust & Safety)</h2>
 
       {errorMessage && (
         <div style={{ padding: "0.75rem 1rem", backgroundColor: "#fee2e2", color: "#991b1b", borderRadius: "6px", marginBottom: "1rem" }}>
           <strong>Notice:</strong> {errorMessage}
         </div>
+      )}
+
+      {/* 120-Second Post-Call Grace Reporting Banner */}
+      {previousSessionGrace && (
+        <PreviousPartnerNotice
+          graceExpiresAt={previousSessionGrace.expiresAt}
+          onOpenReport={() => handleOpenReport(previousSessionGrace.sessionId, "previous partner")}
+          onExpire={() => setPreviousSessionGrace(null)}
+        />
       )}
 
       {/* Broaden Prompt Banner */}
@@ -783,7 +867,45 @@ export default function App() {
           />
         </div>
         <div style={{ flex: "1 1 300px" }}>
-          <h4>Remote Video (Partner Stream)</h4>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+            <h4 style={{ margin: 0 }}>Remote Video (Partner Stream)</h4>
+            {uiState === "matched" && (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={() => handleOpenReport(currentSessionIdRef.current, "current partner")}
+                  style={{
+                    padding: "0.25rem 0.6rem",
+                    fontSize: "0.8rem",
+                    backgroundColor: "#f1f5f9",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontWeight: "500",
+                    color: "#334155"
+                  }}
+                >
+                  ⚑ Report
+                </button>
+                <button
+                  type="button"
+                  onClick={handleOpenBlockModal}
+                  style={{
+                    padding: "0.25rem 0.6rem",
+                    fontSize: "0.8rem",
+                    backgroundColor: "#fee2e2",
+                    border: "1px solid #fecaca",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontWeight: "500",
+                    color: "#991b1b"
+                  }}
+                >
+                  ✕ Block
+                </button>
+              </div>
+            )}
+          </div>
           <video
             ref={remoteVideoRef}
             autoPlay
@@ -792,6 +914,21 @@ export default function App() {
           />
         </div>
       </section>
+
+      {/* Safety Modals: Report & Block Confirmation */}
+      <ReportModal
+        isOpen={reportModal.isOpen}
+        targetSessionId={reportModal.targetSessionId}
+        partnerLabel={reportModal.label}
+        onSubmitReport={handleSubmitReport}
+        onClose={() => setReportModal({ isOpen: false, targetSessionId: null, label: "partner" })}
+      />
+      <BlockConfirmModal
+        isOpen={isBlockModalOpen}
+        onConfirm={handleBlockConfirm}
+        onCancel={() => setIsBlockModalOpen(false)}
+        isSubmitting={isBlocking}
+      />
     </main>
   );
 }

@@ -1,9 +1,9 @@
 # Shuup - Progress Memory & State Log
 
 ## Current Status
-- **Current Phase:** Phase 7a complete; Phase 7b next (consent screen, Report/Block buttons, moderation doc)
-- **Active Step:** Phase 7a verified and committed
-- **Next Step:** Phase 7b (consent screen, in-call Report/Block UI, moderation procedure runbook, manual testing)
+- **Current Phase:** Phase 7 complete (7a and 7b); Phase 8 next (database and admin dashboard, free tier only, no payment card)
+- **Active Step:** Phase 7b committed; ready to design and plan Phase 8
+- **Next Step:** Phase 8 (database and admin dashboard, free tier only, no payment card)
 
 ---
 

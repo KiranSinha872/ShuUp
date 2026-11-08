@@ -9,8 +9,9 @@ Shuup is a browser-based, one-to-one random video chat web application offering 
 - **Platform:** Modern desktop and mobile web browsers with camera and microphone access.
 
 ## 3. Core Functional Requirements
-1. **First-Visit Consent & Rules Modal:**
-   - Explicit confirmation of age (18+) and agreement to Community Rules prior to requesting camera/microphone permissions.
+1. **Consent & Rules Gate (In-Memory Per Page Load):**
+   - Explicit confirmation of age (18+), direct P2P IP visibility, and agreement to Community Rules prior to requesting camera/microphone permissions.
+   - Maintained in memory per page load (never stored in `localStorage`) so every page refresh prompts for re-verification.
 2. **Preference-Aware Matchmaking:**
    - Single-select identity: `Man`, `Woman`, `Non-binary`, `Prefer not to say`.
    - Multi-select match preferences: `Men`, `Women`, `Non-binary people`, `Anyone`.

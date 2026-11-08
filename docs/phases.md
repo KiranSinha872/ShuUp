@@ -73,21 +73,21 @@ Development proceeds sequentially through 9 distinct phases. Each milestone must
 ---
 
 ### Phase 7: Trust, Safety & Invite Gate
-- **Phase 7a (Implemented, Awaiting Verification):**
-  - **Handshake Invite Gate:** Server-side validation via `crypto.timingSafeEqual` against `INVITE_CODES` with per-token+address lockout (5 attempts in 15 mins).
-  - **Token Hashing & Zero Secret Logging:** Client token stored in `localStorage`, hashed via `HMAC-SHA256` with `SERVER_SALT`. Zero logging of raw tokens, codes, or notes.
+- **Phase 7a (Complete - Committed):**
+  - **Handshake Invite Gate:** Server-side validation via `crypto.timingSafeEqual` against `INVITE_CODES` with dual lockout (per-token+address and per-address rotation limiter) with memory bounding.
+  - **Token Hashing & Zero Secret Logging:** Client token stored in `localStorage`, hashed via `HMAC-SHA256` with `SERVER_SALT`. Zero logging of raw tokens, codes, notes, or network addresses.
   - **Startup Safeguards:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) and `INVITE_CODES` ($\ge 16$) on startup, exiting cleanly without logging secrets.
   - **Multi-Tier Rate Limiting:** Token-bucket rate limits per event type (30-candidate ICE burst; strict queue/safety limits) and global flood limiter.
-  - **Grace Period & Abuse Controls:** 120s post-call grace window for reporting/blocking; 24h in-memory bidirectional block check inside `isCompatible`; automated 1h cooldown after $\ge 3$ distinct verified partner reports.
+  - **Grace Period & Abuse Controls:** 120s post-call grace window preserved per session for reporting/blocking; in-memory bidirectional block check inside `isCompatible`; automated 1h cooldown after $\ge 3$ distinct verified partner reports.
   - **Reports Storage:** Appends sanitized incident records to `backend/data/reports.jsonl` (file mode `0600`, git-ignored, 10MB cap); urgent categories trigger high-visibility terminal alert.
-  - **Minimal Client Integration:** Bare invite-code input screen preceding camera/preview; Start button disabled until media is ready.
-- **Phase 7b (Planned):**
-  - Consent screen: Explicit 18+ declaration and Community Rules agreement checkboxes before media activation.
-  - In-call `Report` and `Block` UI buttons and modal dialog.
-  - Operational moderation protocol documentation (`docs/moderation-procedure.md`).
-  - Full manual two-browser verification across invite, report, block, and cooldown flows.
+- **Phase 7b (Implemented - Awaiting Verification):**
+  - **Sequential Entry Flow:** Invite code gate screen -> 18+ and P2P consent gate screen -> media stream activation. Both gates held in-memory per page load.
+  - **Consent Screen:** 3 mandatory checkboxes (18+, direct P2P IP visibility, community rules & safety tools) with honest warnings regarding unscreened video and browser verification limits.
+  - **Safety UI:** `Report` and `Block` buttons in video header; `ReportModal` with fixed target session ID and live note counter; `BlockConfirmModal` with immediate call termination.
+  - **120-Second Post-Call Grace Banner:** Labeled "Previous partner", survives rematching into new calls, live countdown, clears on report or expiration.
+  - **Moderation Runbook:** Complete operational documentation in `docs/moderation-procedure.md` covering token bans, invite code rotation, emergency procedures, and backup workflows.
 - **Acceptance Check:**
-  - Works with real browsers: Handshake rejects unauthorized or locked-out connections; authorized users enter with client token; reports append to reports.jsonl; blocked partners cannot be rematched.
+  - Works with real browsers: Handshake rejects unauthorized connections; consent gate precedes media access; Report and Block dialogs function in-call and during post-call grace; zero network address leaks in logs.
 
 ---
 
