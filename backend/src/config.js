@@ -45,6 +45,7 @@ export const COOLDOWN_WINDOW_MS = parseNumber(process.env.COOLDOWN_WINDOW_MS, 60
 export const COOLDOWN_DURATION_MS = parseNumber(process.env.COOLDOWN_DURATION_MS, 60 * 60 * 1000);
 export const REPORTS_FILE_PATH = process.env.REPORTS_FILE_PATH || "backend/data/reports.jsonl";
 export const MAX_REPORTS_FILE_SIZE_BYTES = parseNumber(process.env.MAX_REPORTS_FILE_SIZE_BYTES, 10 * 1024 * 1024);
+export const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || "backend/data/shuup.db";
 
 export function validateStartupConfig(cfg = {}) {
   const requireInvite = cfg.REQUIRE_INVITE ?? REQUIRE_INVITE;

@@ -7,6 +7,7 @@ import {
   PING_INTERVAL,
   PING_TIMEOUT,
   GHOST_SWEEP_INTERVAL_MS,
+  SQLITE_DB_PATH,
   validateStartupConfig
 } from "./config.js";
 import { validateJoinPayload } from "./compatibility.js";
@@ -14,6 +15,7 @@ import { createMatchmaker } from "./matchmaker.js";
 import { setupSignaling } from "./signaling.js";
 import { createIceManager } from "./ice.js";
 import { createSafetyManager } from "./safety.js";
+import { createStorageAdapter } from "./storage/index.js";
 
 // Validate required config on startup (exits safely if invalid, no secrets logged)
 validateStartupConfig();
@@ -54,6 +56,23 @@ const matchmaker = createMatchmaker({
 });
 const iceManager = createIceManager();
 iceManager.warmCache();
+
+export const storageManager = createStorageAdapter({ dbPath: SQLITE_DB_PATH });
+const activeSessionMeta = new Map(); // sessionId -> { startedAt, connectionType }
+
+function recordSessionEnd(sessionId) {
+  const meta = activeSessionMeta.get(sessionId);
+  if (!meta) return;
+  activeSessionMeta.delete(sessionId);
+  const endedAt = Date.now();
+  const durationSeconds = Math.max(0, Math.round((endedAt - meta.startedAt) / 1000));
+  storageManager.logCall({
+    startedAt: new Date(meta.startedAt).toISOString(),
+    endedAt: new Date(endedAt).toISOString(),
+    durationSeconds,
+    connectionType: meta.connectionType
+  });
+}
 
 // Handshake authentication middleware
 io.use((socket, next) => {
@@ -139,6 +158,9 @@ async function handleMatchedSession(sessionId, callerId, calleeId) {
     iceServers,
     iceTransportPolicy
   });
+
+  // Track session metadata for anonymous call logging (Phase 8a)
+  activeSessionMeta.set(sessionId, { startedAt: Date.now(), connectionType: "unknown" });
 }
 
 export function startGhostSweep(ioInstance, matchmakerInstance, safetyInstance = safetyManager, intervalMs = GHOST_SWEEP_INTERVAL_MS) {
@@ -146,6 +168,7 @@ export function startGhostSweep(ioInstance, matchmakerInstance, safetyInstance =
     const isConnected = (id) => Boolean(ioInstance.sockets.sockets.get(id)?.connected);
     const orphaned = matchmakerInstance.sweepGhosts(isConnected);
     for (const { notifySocketId, sessionId } of orphaned) {
+      recordSessionEnd(sessionId);
       const socket = ioInstance.sockets.sockets.get(notifySocketId);
       if (socket) {
         socket.leave(`session:${sessionId}`);
@@ -270,6 +293,7 @@ io.on("connection", (socket) => {
     const result = matchmaker.leaveSession(socket.id);
 
     if (result.wasInSession) {
+      recordSessionEnd(result.sessionId);
       socket.leave(`session:${result.sessionId}`);
       const partnerSocket = io.sockets.sockets.get(result.partnerId);
 
@@ -317,6 +341,17 @@ io.on("connection", (socket) => {
       reportedHashedToken
     });
 
+    if (result.ok) {
+      storageManager.saveReport({
+        reportId: result.reportId,
+        sessionId,
+        category,
+        note,
+        reportedAccountId: reportedHashedToken,
+        reporterAccountId: socket.hashedToken
+      });
+    }
+
     if (typeof callback === "function") {
       callback(result);
     }
@@ -352,6 +387,7 @@ io.on("connection", (socket) => {
 
     // If active session: dissolve immediately and notify partner
     if (partnerSocketId) {
+      recordSessionEnd(sessionId);
       matchmaker.leaveSession(socket.id, { recordRecent: false });
       const partnerSocket = io.sockets.sockets.get(partnerSocketId);
       if (partnerSocket) {
@@ -392,6 +428,11 @@ io.on("connection", (socket) => {
     }
     recordStat(key);
 
+    const meta = activeSessionMeta.get(payload.sessionId);
+    if (meta) {
+      meta.connectionType = payload.connectionType;
+    }
+
     console.log(`[Stats] Session ${payload.sessionId} reported connectionType: ${payload.connectionType}`);
   });
 
@@ -406,6 +447,7 @@ io.on("connection", (socket) => {
     const result = matchmaker.disconnectUser(socket.id);
 
     if (result.wasInSession) {
+      recordSessionEnd(result.sessionId);
       const partnerSocket = io.sockets.sockets.get(result.partnerId);
       if (partnerSocket && partnerSocket.hashedToken) {
         safetyManager.setGracePeriod(result.partnerId, result.sessionId, socket.hashedToken);
@@ -425,3 +467,34 @@ server.listen(PORT, () => {
   console.log(`Shuup backend running on port ${PORT}`);
   console.log(`Allowed CORS origin: ${CORS_ORIGIN}`);
 });
+
+// Background maintenance: prune raw call logs older than 90 days into daily_summaries
+// Run once shortly after startup (5s non-blocking delay) so frequent restarts still prune, plus on 24h interval
+const initialPruneTimer = setTimeout(() => {
+  storageManager.pruneOldData().catch((err) => {
+    console.warn("[Storage] Initial startup prune error:", err.message);
+  });
+}, 5_000);
+initialPruneTimer.unref();
+
+const pruneTimer = setInterval(() => {
+  storageManager.pruneOldData().catch((err) => {
+    console.warn("[Storage] Daily prune error:", err.message);
+  });
+}, 24 * 60 * 60 * 1000);
+pruneTimer.unref();
+
+// Graceful shutdown: flush pending write queues on termination signals
+async function handleShutdown(signal) {
+  console.log(`[Server] Received ${signal}. Draining storage queues before shutdown...`);
+  try {
+    await storageManager.close({ timeoutMs: 2000 });
+    console.log("[Server] Storage queues flushed cleanly.");
+  } catch (err) {
+    console.warn("[Server] Storage flush error on shutdown:", err.message);
+  }
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => handleShutdown("SIGTERM"));
+process.on("SIGINT", () => handleShutdown("SIGINT"));
