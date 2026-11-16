@@ -103,7 +103,7 @@ export function createStorageQueue(database, options = {}) {
     }
 
     try {
-      database.batchInsert(batch);
+      await database.batchInsert(batch);
 
       // Successfully written: remove from respective queues
       if (reportsToFlush.length > 0) {

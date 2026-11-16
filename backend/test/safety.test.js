@@ -8,7 +8,6 @@ import {
 } from "../src/config.js";
 import {
   hashToken,
-  validateInviteCode,
   resolveClientAddress,
   sanitizeNote,
   TokenBucket,
@@ -18,18 +17,15 @@ import {
 import { createMatchmaker } from "../src/matchmaker.js";
 
 test("Phase 7a: Startup Configuration Validation", async (t) => {
-  await t.test("fails safely if SERVER_SALT is missing when REQUIRE_INVITE=true", () => {
+  await t.test("fails safely if SERVER_SALT is missing", () => {
     assert.throws(
       () => {
         validateStartupConfig({
-          REQUIRE_INVITE: true,
-          SERVER_SALT: "",
-          INVITE_CODES: ["1234567890abcdef"]
+          SERVER_SALT: ""
         });
       },
       (err) => {
         assert.match(err.message, /SERVER_SALT is missing or shorter than 32 characters/);
-        assert.doesNotMatch(err.message, /1234567890abcdef/);
         return true;
       }
     );
@@ -39,9 +35,7 @@ test("Phase 7a: Startup Configuration Validation", async (t) => {
     assert.throws(
       () => {
         validateStartupConfig({
-          REQUIRE_INVITE: true,
-          SERVER_SALT: "short-salt-under-32-chars",
-          INVITE_CODES: ["1234567890abcdef"]
+          SERVER_SALT: "short-salt-under-32-chars"
         });
       },
       (err) => {
@@ -51,61 +45,16 @@ test("Phase 7a: Startup Configuration Validation", async (t) => {
     );
   });
 
-  await t.test("fails safely if INVITE_CODES is missing or empty", () => {
-    assert.throws(
-      () => {
-        validateStartupConfig({
-          REQUIRE_INVITE: true,
-          SERVER_SALT: "0123456789abcdef0123456789abcdef0123456789abcdef",
-          INVITE_CODES: []
-        });
-      },
-      (err) => {
-        assert.match(err.message, /INVITE_CODES is missing or empty/);
-        return true;
-      }
-    );
-  });
-
-  await t.test("fails safely if any invite code is shorter than 16 characters", () => {
-    assert.throws(
-      () => {
-        validateStartupConfig({
-          REQUIRE_INVITE: true,
-          SERVER_SALT: "0123456789abcdef0123456789abcdef0123456789abcdef",
-          INVITE_CODES: ["valid-code-longer-than-16", "short-code"]
-        });
-      },
-      (err) => {
-        assert.match(err.message, /shorter than 16 characters/);
-        assert.doesNotMatch(err.message, /short-code/);
-        return true;
-      }
-    );
-  });
-
-  await t.test("passes validation with valid salt (>=32) and codes (>=16)", () => {
+  await t.test("passes validation with valid salt (>=32)", () => {
     assert.doesNotThrow(() => {
       validateStartupConfig({
-        REQUIRE_INVITE: true,
-        SERVER_SALT: "0123456789abcdef0123456789abcdef0123456789abcdef",
-        INVITE_CODES: ["1234567890abcdef", "fedcba0987654321"]
-      });
-    });
-  });
-
-  await t.test("passes validation when REQUIRE_INVITE=false even if salt/codes are empty", () => {
-    assert.doesNotThrow(() => {
-      validateStartupConfig({
-        REQUIRE_INVITE: false,
-        SERVER_SALT: "",
-        INVITE_CODES: []
+        SERVER_SALT: "0123456789abcdef0123456789abcdef0123456789abcdef"
       });
     });
   });
 });
 
-test("Phase 7a: Token Hashing & Invite Verification", async (t) => {
+test("Phase 7a: Token Hashing & Client Identity", async (t) => {
   const salt = "0123456789abcdef0123456789abcdef0123456789abcdef";
 
   await t.test("HMAC-SHA256 determinism", () => {
@@ -118,37 +67,22 @@ test("Phase 7a: Token Hashing & Invite Verification", async (t) => {
     assert.equal(hash1, hash2);
     assert.notEqual(hash1, hash3);
   });
-
-  await t.test("constant-time invite code comparison", () => {
-    const codes = ["1234567890abcdef", "fedcba0987654321"];
-    assert.equal(validateInviteCode("1234567890abcdef", codes), true);
-    assert.equal(validateInviteCode("fedcba0987654321", codes), true);
-    assert.equal(validateInviteCode("wrong-code-here-12345", codes), false);
-    assert.equal(validateInviteCode("", codes), false);
-    assert.equal(validateInviteCode(null, codes), false);
-  });
 });
 
-test("Phase 7a: Handshake Authentication & Shared-Address Lockout", async (t) => {
-  let currentTime = 1_000_000;
-  const timeProvider = () => currentTime;
+test("Phase 7a: Handshake Authentication & Connection Caps", async (t) => {
   const salt = "0123456789abcdef0123456789abcdef0123456789abcdef";
-  const validCode = "1234567890abcdef";
 
   const safety = createSafetyManager({
-    timeProvider,
     serverSalt: salt,
-    inviteCodes: [validCode],
-    requireInvite: true,
     maxSocketsPerAddress: 50,
-    maxTotalConnections: 100,
+    maxConnections: 100,
     bannedTokens: [hashToken("banned-token-uuid", salt)]
   });
 
   await t.test("rejects missing or short client tokens", () => {
     const res = safety.authenticateHandshake({
       address: "1.2.3.4",
-      auth: { inviteCode: validCode, clientToken: "short" }
+      auth: { clientToken: "short" }
     });
     assert.equal(res.ok, false);
     assert.equal(res.error, "INVALID_CLIENT_TOKEN");
@@ -157,89 +91,45 @@ test("Phase 7a: Handshake Authentication & Shared-Address Lockout", async (t) =>
   await t.test("rejects banned token", () => {
     const res = safety.authenticateHandshake({
       address: "1.2.3.4",
-      auth: { inviteCode: validCode, clientToken: "banned-token-uuid" }
+      auth: { clientToken: "banned-token-uuid" }
     });
     assert.equal(res.ok, false);
     assert.equal(res.error, "BANNED");
   });
 
-  await t.test("correct code never triggers lockout", () => {
+  await t.test("valid tokens connect successfully", () => {
     for (let i = 0; i < 10; i++) {
       const res = safety.authenticateHandshake({
         address: `10.0.0.${i}`,
-        auth: { inviteCode: validCode, clientToken: `valid-token-${i}-xyz` }
+        auth: { clientToken: `valid-token-${i}-xyz` }
       });
       assert.equal(res.ok, true);
     }
   });
 
-  await t.test("5 failed attempts locks out specific address + clientToken pair", () => {
-    const addr = "192.168.1.100";
-    const tokenA = "attacker-token-alpha";
-
-    for (let i = 0; i < 4; i++) {
-      const res = safety.authenticateHandshake({
-        address: addr,
-        auth: { inviteCode: "wrong-code-try", clientToken: tokenA }
-      });
-      assert.equal(res.ok, false);
-      assert.equal(res.error, "INVALID_INVITE_CODE");
-    }
-
-    // 5th attempt locks out
-    const fifth = safety.authenticateHandshake({
-      address: addr,
-      auth: { inviteCode: "wrong-code-try", clientToken: tokenA }
-    });
-    assert.equal(fifth.ok, false);
-    assert.equal(fifth.error, "INVALID_INVITE_CODE");
-
-    // 6th attempt is locked out even with correct code
-    const sixth = safety.authenticateHandshake({
-      address: addr,
-      auth: { inviteCode: validCode, clientToken: tokenA }
-    });
-    assert.equal(sixth.ok, false);
-    assert.equal(sixth.error, "INVITE_LOCKED_OUT");
-  });
-
-  await t.test("shared address does NOT lock out a different clientToken", () => {
-    const addr = "192.168.1.100";
-    const tokenB = "innocent-roommate-token";
-
-    // Innocent token on same shared Wi-Fi IP connects successfully with valid code
-    const res = safety.authenticateHandshake({
-      address: addr,
-      auth: { inviteCode: validCode, clientToken: tokenB }
-    });
-    assert.equal(res.ok, true);
-  });
-
-  await t.test("enforces maxSocketsPerAddress and maxTotalConnections", () => {
+  await t.test("enforces maxSocketsPerAddress and maxConnections (SERVER_FULL)", () => {
     const limitedSafety = createSafetyManager({
       serverSalt: salt,
-      inviteCodes: [validCode],
-      requireInvite: true,
       maxSocketsPerAddress: 2,
-      maxTotalConnections: 3
+      maxConnections: 3
     });
 
     const conn1 = limitedSafety.authenticateHandshake({
       address: "10.0.0.1",
-      auth: { inviteCode: validCode, clientToken: "token-1-abc" }
+      auth: { clientToken: "token-1-abc" }
     });
     assert.equal(conn1.ok, true);
 
     const conn2 = limitedSafety.authenticateHandshake({
       address: "10.0.0.1",
-      auth: { inviteCode: validCode, clientToken: "token-2-def" }
+      auth: { clientToken: "token-2-def" }
     });
     assert.equal(conn2.ok, true);
 
     // 3rd from same IP rejected by maxSocketsPerAddress
     const conn3 = limitedSafety.authenticateHandshake({
       address: "10.0.0.1",
-      auth: { inviteCode: validCode, clientToken: "token-3-ghi" }
+      auth: { clientToken: "token-3-ghi" }
     });
     assert.equal(conn3.ok, false);
     assert.equal(conn3.error, "MAX_ADDRESS_CONNECTIONS_REACHED");
@@ -247,126 +137,25 @@ test("Phase 7a: Handshake Authentication & Shared-Address Lockout", async (t) =>
     // From different IP allowed, hits total max (3)
     const conn4 = limitedSafety.authenticateHandshake({
       address: "10.0.0.2",
-      auth: { inviteCode: validCode, clientToken: "token-4-jkl" }
+      auth: { clientToken: "token-4-jkl" }
     });
     assert.equal(conn4.ok, true);
 
-    // 4th overall rejected by maxTotalConnections
+    // 4th overall rejected by maxConnections with SERVER_FULL
     const conn5 = limitedSafety.authenticateHandshake({
       address: "10.0.0.3",
-      auth: { inviteCode: validCode, clientToken: "token-5-mno" }
+      auth: { clientToken: "token-5-mno" }
     });
     assert.equal(conn5.ok, false);
-    assert.equal(conn5.error, "MAX_SERVER_CONNECTIONS_REACHED");
+    assert.equal(conn5.error, "SERVER_FULL");
 
     // Releasing connection frees slot
     limitedSafety.releaseConnection("10.0.0.1");
     const conn6 = limitedSafety.authenticateHandshake({
       address: "10.0.0.3",
-      auth: { inviteCode: validCode, clientToken: "token-6-pqr" }
+      auth: { clientToken: "token-6-pqr" }
     });
     assert.equal(conn6.ok, true);
-  });
-
-  await t.test("rotating 200 fresh tokens from one address gets locked out at the address threshold", () => {
-    const rotAddr = "192.168.20.1";
-    // 50 attempts return INVALID_INVITE_CODE
-    for (let i = 0; i < 50; i++) {
-      const res = safety.authenticateHandshake({
-        address: rotAddr,
-        auth: { inviteCode: "bad_code_try", clientToken: `token-rot-${i}-abcdef` }
-      });
-      assert.equal(res.ok, false);
-      assert.equal(res.error, "INVALID_INVITE_CODE");
-    }
-
-    // 51st through 200th attempts are locked out by address lockout
-    for (let i = 50; i < 200; i++) {
-      const res = safety.authenticateHandshake({
-        address: rotAddr,
-        auth: { inviteCode: "bad_code_try", clientToken: `token-rot-${i}-abcdef` }
-      });
-      assert.equal(res.ok, false);
-      assert.equal(res.error, "INVITE_LOCKED_OUT");
-    }
-
-    // Even valid code is blocked while address is locked out
-    const validBlocked = safety.authenticateHandshake({
-      address: rotAddr,
-      auth: { inviteCode: validCode, clientToken: "token-rot-fresh-valid" }
-    });
-    assert.equal(validBlocked.ok, false);
-    assert.equal(validBlocked.error, "INVITE_LOCKED_OUT");
-  });
-
-  await t.test("different address is unaffected when first address is locked out", () => {
-    const freshAddr = "192.168.20.2";
-    const res = safety.authenticateHandshake({
-      address: freshAddr,
-      auth: { inviteCode: validCode, clientToken: "token-fresh-addr-ok" }
-    });
-    assert.equal(res.ok, true);
-  });
-
-  await t.test("valid codes from a shared address never trip either counter", () => {
-    const sharedAddr = "192.168.30.1";
-    for (let i = 0; i < 60; i++) {
-      const res = safety.authenticateHandshake({
-        address: sharedAddr,
-        auth: { inviteCode: validCode, clientToken: `shared-valid-token-${i}` }
-      });
-      assert.equal(res.ok, true, `Attempt ${i} should succeed`);
-      safety.releaseConnection(sharedAddr);
-    }
-    assert.equal(safety.isLockedOut(sharedAddr, "shared-valid-token-any"), false);
-    assert.equal(safety._getAddressLockouts().has(sharedAddr), false);
-  });
-
-  await t.test("old records are removed by sweepExpired()", () => {
-    const partialAddr = "192.168.40.1";
-    const partialToken = "token-partial-attempts";
-    // 2 failed attempts (under 5 token limit and 50 address limit)
-    safety.authenticateHandshake({
-      address: partialAddr,
-      auth: { inviteCode: "wrong-code", clientToken: partialToken }
-    });
-    safety.authenticateHandshake({
-      address: partialAddr,
-      auth: { inviteCode: "wrong-code", clientToken: partialToken }
-    });
-
-    assert.ok(safety._getLockouts().has(`${partialAddr}:${partialToken}`));
-    assert.ok(safety._getAddressLockouts().has(partialAddr));
-
-    // Advance clock past lockout window (15 minutes + 1 ms)
-    currentTime += 15 * 60 * 1000 + 1;
-    safety.sweepExpired();
-
-    // Both partial records must be purged
-    assert.equal(safety._getLockouts().has(`${partialAddr}:${partialToken}`), false);
-    assert.equal(safety._getAddressLockouts().has(partialAddr), false);
-  });
-
-  await t.test("cap holds under 100,000 simulated rotating-token attempts without unbounded growth", () => {
-    const cappedSafety = createSafetyManager({
-      timeProvider,
-      serverSalt: salt,
-      inviteCodes: [validCode],
-      requireInvite: true,
-      maxTrackedLockouts: 500,
-      maxTrackedAddressLockouts: 500,
-      inviteAddressLockoutAttempts: 500_000 // avoid early lockout so all attempts register
-    });
-
-    for (let i = 0; i < 100_000; i++) {
-      cappedSafety.authenticateHandshake({
-        address: `10.${(i >> 8) & 255}.${i & 255}.1`,
-        auth: { inviteCode: "wrong", clientToken: `rot-token-${i}` }
-      });
-    }
-
-    assert.ok(cappedSafety._getLockouts().size <= 500, `Token lockouts size ${cappedSafety._getLockouts().size} should not exceed cap 500`);
-    assert.ok(cappedSafety._getAddressLockouts().size <= 500, `Address lockouts size ${cappedSafety._getAddressLockouts().size} should not exceed cap 500`);
   });
 });
 
@@ -674,30 +463,21 @@ test("Phase 7a: Reporting, Sanitization, Cooldown & Zero Leak Audit", async (t) 
 
     const auditSafety = createSafetyManager({
       logger: testLogger,
-      inviteCodes: ["1234567890abcdef"],
       serverSalt: "0123456789abcdef0123456789abcdef0123456789abcdef",
-      requireInvite: true,
-      maxSocketsPerAddress: 1,
-      inviteAddressLockoutAttempts: 3,
-      inviteLockoutAttempts: 2
+      maxSocketsPerAddress: 1
     });
 
     const testIP1 = "198.51.100.42";
     const testIP2 = "203.0.113.19";
     const testIP3 = "2001:db8::8a2e:370:7334";
 
-    // 1. Trigger token lockout
-    auditSafety.authenticateHandshake({ address: testIP1, auth: { inviteCode: "bad", clientToken: "token-lock-user" } });
-    auditSafety.authenticateHandshake({ address: testIP1, auth: { inviteCode: "bad", clientToken: "token-lock-user" } });
-
-    // 2. Trigger address lockout
-    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-1" } });
-    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-2" } });
-    auditSafety.authenticateHandshake({ address: testIP2, auth: { inviteCode: "bad", clientToken: "token-ip-user-3" } });
-
-    // 3. Trigger connection cap rejection
-    auditSafety.authenticateHandshake({ address: testIP3, auth: { inviteCode: "1234567890abcdef", clientToken: "token-cap-1" } });
-    auditSafety.authenticateHandshake({ address: testIP3, auth: { inviteCode: "1234567890abcdef", clientToken: "token-cap-2" } });
+    // Trigger connection cap rejection
+    auditSafety.authenticateHandshake({ address: testIP1, auth: { clientToken: "token-cap-1" } });
+    auditSafety.authenticateHandshake({ address: testIP1, auth: { clientToken: "token-cap-2" } });
+    auditSafety.authenticateHandshake({ address: testIP2, auth: { clientToken: "token-cap-3" } });
+    auditSafety.authenticateHandshake({ address: testIP2, auth: { clientToken: "token-cap-4" } });
+    auditSafety.authenticateHandshake({ address: testIP3, auth: { clientToken: "token-cap-5" } });
+    auditSafety.authenticateHandshake({ address: testIP3, auth: { clientToken: "token-cap-6" } });
 
     const combinedLog = logs.join("\n");
     // Assert no IPv4 pattern

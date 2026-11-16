@@ -24,16 +24,16 @@ Shuup/
 │   ├── index.html                  # Single-page application HTML entry mount
 │   ├── src/
 │   │   ├── main.jsx                # React root bootstrap and DOM rendering
-│   │   ├── App.jsx                 # Primary app state machine (invite gate, consent, idle, waiting, matched call views)
+│   │   ├── App.jsx                 # Primary app state machine (consent gate, idle, waiting, matched call views)
 │   │   ├── webrtc.js               # WebRTC peer connection manager (STUN, streams, ICE candidate buffering)
 │   │   ├── safety-helpers.js       # Pure safety helper functions (validation, mapping, countdown)
 │   │   ├── App.css                 # [Planned Phase 6+] Split-screen and responsive design styling
-│   │   ├── components/             # Modular UI components (InviteGate, ConsentGate, ReportModal, BlockConfirmModal, PreviousPartnerNotice)
+│   │   ├── components/             # Modular UI components (ConsentGate, ReportModal, BlockConfirmModal, PreviousPartnerNotice)
 │   │   └── pages/                  # [Planned Phase 8] Protected /admin route
 │   └── test/
 │       └── safety-helpers.test.js  # Frontend unit tests for safety helpers and consent logic
 └── backend/                        # Plain Node.js HTTP + Socket.IO server (No Express)
-    ├── .env.example                # Example server variables (PORT, CORS_ORIGIN, INVITE_CODES, SERVER_SALT)
+    ├── .env.example                # Example server variables (PORT, CORS_ORIGIN, SERVER_SALT, MAX_CONNECTIONS)
     ├── .gitignore                  # Backend ignore (node_modules, .env*, data/)
     ├── package.json                # Backend dependencies, start scripts, and node --test script
     ├── data/                       # Git-ignored local directory (reports.jsonl with 0600 permissions)
@@ -50,5 +50,5 @@ Shuup/
         ├── matchmaker.test.js      # Unit tests for queue FIFO, 6-user scenario, and longest-waiter-first
         ├── lifecycle.test.js       # Unit tests for recent-partner memory, ghost cleanup, and broaden prompt flow
         ├── connectivity.test.js    # Unit tests for ICE management, fallback, matched payload, and stats validation
-        └── safety.test.js          # Unit tests for invite validation, lockout, token hashing, blocks, and rate limiting
+        └── safety.test.js          # Unit tests for handshake auth, connection caps, token hashing, blocks, and rate limiting
 ```

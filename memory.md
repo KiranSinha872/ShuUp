@@ -11,27 +11,27 @@
 To run the prototype locally, start both dev servers in separate terminal tabs:
 1. **Backend:** `cd backend && npm run dev` (starts on port 4000).
 2. **Frontend:** `cd frontend && npm run dev` (starts on port 3000).
-- The browser UI shows `Server: Connected` (green) only when the backend server is active and the client has authenticated with a valid invite code. If the backend is stopped or unreachable, the UI indicates `Server: Disconnected` (red) and disables the Start button to prevent dead clicks.
+- The browser UI shows `Server: Connected` (green) only when the backend server is active and the client has successfully connected. If the backend is stopped or unreachable, the UI indicates `Server: Disconnected` (red) and disables the Start button to prevent dead clicks.
 
 ---
 
-## Phase 7a Implemented (Awaiting Verification)
-- **Handshake Invite Gate:** Server-side validation via `crypto.timingSafeEqual` over fixed-length SHA-256 digests against `INVITE_CODES`. Prevents timing leaks without early return.
-- **Dual-Tier Lockout Defense:**
-  - Strict per-token lockout: 5 failed attempts in 15 minutes locks out specific `${address}:${clientToken}` with `INVITE_LOCKED_OUT`.
-  - Looser per-address lockout: `INVITE_ADDRESS_LOCKOUT_ATTEMPTS` (default 50 failed attempts in 15 min) rejects all handshakes from that IP with `INVITE_LOCKED_OUT` to stop token-rotation bypass. Only failed attempts count; valid codes never trip it. Shared networks (campus Wi-Fi, tunnels) can raise the limit.
+## Safety & Security Layer
+- **Handshake Authentication:** Server-side validation of client token; hashes client token with `HMAC-SHA256` keyed by `SERVER_SALT`. Checks against `BANNED_TOKENS`.
+- **Connection & Resource Defense:**
+  - IP concurrency cap: `MAX_SOCKETS_PER_ADDRESS` (default 5 concurrent connections per address).
+  - Global server capacity: `MAX_CONNECTIONS` (default 500 connections); rejects excess connections with `SERVER_FULL`.
 - **Memory Growth & Map Bounds:**
-  - All in-memory maps in `safety.js` (`lockouts`, `addressLockouts`, `userBlocks`, `sessionReports`, `verifiedPairings`, `userReportTallies`, `cooldowns`) enforce hard bounds (`MAX_TRACKED_LOCKOUTS`, default 10,000) using oldest-entry LRU eviction (`setWithCap`).
-  - `sweepExpired()` actively purges all failed-attempt records older than 15 minutes, including partial attempts that never reached lockout thresholds.
-- **Anonymous Client Token:** Generated via `crypto.randomUUID()` in `localStorage`, hashed server-side with `HMAC-SHA256` keyed by `SERVER_SALT`. Zero logging of raw tokens, codes, or notes.
-- **Startup Config Guard:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) and `INVITE_CODES` ($\ge 16$ per code) on startup, failing safely with a clear message (no secrets printed).
+  - All in-memory maps in `safety.js` (`userBlocks`, `sessionReports`, `verifiedPairings`, `userReportTallies`, `cooldowns`) enforce hard bounds using oldest-entry LRU eviction (`setWithCap`).
+  - `sweepExpired()` actively purges expired state (tallies, cooldowns, reports, pairings).
+- **Anonymous Client Token:** Generated via `crypto.randomUUID()` in `localStorage`, hashed server-side with `HMAC-SHA256` keyed by `SERVER_SALT`. Zero logging of raw tokens or notes.
+- **Startup Config Guard:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) on startup, failing safely with a clear message (no secrets printed).
 - **Multi-Tier Rate Limiting:** Token-bucket rate limits per event type: generous 30-capacity bucket (10/s refill) for `ice-candidate` bursts; strict buckets for `join-queue`, `offer`, `answer`, `leave-session`, `report-user`, and `block-user`. Global flood limiter drops excessive traffic and signals disconnect upon continuous flood.
 - **Post-Call Grace Window:** Server retains last `sessionId` and partner's `hashedToken` in memory for 120s after call end to permit reporting or blocking a partner who left.
 - **Block & Cooldown Abuse Controls:**
   - In-memory bidirectional block check evaluated in `isCompatible` in constant time without `await` (24h TTL, 100-entry LRU cap). Block ends active call immediately and returns both users to idle.
   - Automated 1h cooldown triggered when a token receives reports from $\ge 3$ distinct verified partner tokens. Rejects `join-queue` with informative status.
 - **Reports File:** Appended to `backend/data/reports.jsonl` (mode `0600`, git-ignored, 10MB cap). Notes are stripped of control characters and capped at 200 characters. Urgent reports trigger a terminal alert without personal data.
-- **Minimal Frontend:** Bare invite-code entry card preceding camera/mic access; Start button disabled until media is ready.
+- **Minimal Frontend:** Consent boxes preceding camera/mic access; Start button disabled until media is ready.
 - **Test Suite:** 77 unit tests passing in `backend/test/` covering all Phase 7a requirements and lockout rotation defense.
 
 ---

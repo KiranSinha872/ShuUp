@@ -4,7 +4,7 @@
 Shuup is a browser-based, one-to-one random video chat web application offering transparent, preference-aware matching without paywalls. Users declare their identity, select who they want to meet, and join an in-memory queue. Once mutually compatible users are found, a peer-to-peer WebRTC video call is established directly between their browsers.
 
 ## 2. Target Audience & Scope
-- **Prototype Phase:** Private, invite-only testing with known adult testers (enforced via an invite-code gate).
+- **Prototype Phase:** Adult testing with confirmed adult testers (enforced via in-memory consent gate; sign-in to be added in Phase 7c).
 - **Public Phase:** Adult users (18+) who agree to community safety guidelines. Stranger-to-stranger video is strictly prohibited for minors.
 - **Platform:** Modern desktop and mobile web browsers with camera and microphone access.
 
@@ -35,8 +35,7 @@ Shuup is a browser-based, one-to-one random video chat web application offering 
    - Backend verification of the admin JWT on every administrative request.
 
 ## 4. Safety, Privacy & Trust (Single Source of Truth)
-- **Invite-Code Gate:** Early testing is gated behind an invite code checked strictly on the server during the Socket.IO handshake against an environment variable (Phase 7a), migrated to Supabase in Phase 8.
-- **Strict Minor Protection:** Unrestricted stranger video is disabled for minors. Private testing is limited to invited adults.
+- **Strict Minor Protection:** Unrestricted stranger video is disabled for minors. Testing is limited to confirmed adults (18+).
 - **Report & Block:**
    - Accessible during every call and for 120 seconds after call end via a grace period window.
    - Reporting supports 5 fixed categories including urgent classifications for minor safety and violent threats. Appended to `backend/data/reports.jsonl` with sanitized notes.
@@ -54,6 +53,6 @@ Shuup is a browser-based, one-to-one random video chat web application offering 
 - **Single-Threaded Safety:** In-memory queue matching must execute synchronously without async interruptions to prevent double-matching.
 
 ## 6. Open Items
-- [OPEN] Production-grade adult age verification vendor (required before public rollout beyond invite-only testers).
+- [OPEN] Production-grade adult age verification vendor (required before public rollout).
 - [OPEN] Long-term TURN provider selection after verifying Metered.ca free quota under multi-user load.
 

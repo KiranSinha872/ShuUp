@@ -1,0 +1,430 @@
+/* ShuUp - OmeTV Clean Dual-Panel Layout */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #000000;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Main Container: Fullscreen Column */
+.shuup-stage {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #ffffff;
+}
+
+/* =================================================== */
+/* UPPER VIEWPORT: TWO EQUAL SIDE-BY-SIDE VIDEO PANELS */
+/* =================================================== */
+.shuup-video-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  background-color: #000000;
+}
+
+/* Video Panel Base */
+.shuup-video-panel {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+  background-color: #000000;
+  overflow: hidden;
+}
+
+.shuup-remote-panel {
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.shuup-local-panel {
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Video Elements */
+.shuup-video-element {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background-color: #000000;
+}
+
+/* Mirror both local preview and remote video so both users see the same selfie orientation */
+.shuup-local-video,
+.shuup-remote-video {
+  transform: scaleX(-1);
+}
+
+/* Small ShuUp Watermark in Top-Left of Remote Video */
+.shuup-watermark {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 10;
+  user-select: none;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.7));
+}
+
+.shuup-watermark-text {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  color: #ffffff;
+}
+
+.shuup-watermark-badge {
+  background: #f25c3b;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+/* Remote Placeholder (Idle / Waiting) */
+.shuup-placeholder-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: #111317;
+  color: #ffffff;
+  text-align: center;
+  z-index: 5;
+}
+
+.shuup-radar-spinner {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 3px solid rgba(34, 197, 94, 0.25);
+  border-top-color: #22c55e;
+  animation: shuup-spin 1.1s infinite linear;
+  margin-bottom: 1rem;
+}
+
+@keyframes shuup-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.shuup-placeholder-headline {
+  font-size: 17px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-bottom: 6px;
+}
+
+.shuup-placeholder-desc {
+  font-size: 13px;
+  color: #94a3b8;
+  max-width: 280px;
+  line-height: 1.4;
+}
+
+/* Top-Right In-Call Safety Actions (Report & Block) */
+.shuup-safety-pills {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  gap: 8px;
+  z-index: 15;
+}
+
+.shuup-pill-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s ease, background-color 0.15s ease;
+}
+
+.shuup-pill-btn:active {
+  transform: translateY(1px);
+}
+
+.shuup-pill-report {
+  background: rgba(255, 255, 255, 0.92);
+  color: #334155;
+  backdrop-filter: blur(6px);
+}
+
+.shuup-pill-report:hover {
+  background: #ffffff;
+}
+
+.shuup-pill-block {
+  background: rgba(239, 68, 68, 0.92);
+  color: #ffffff;
+  backdrop-filter: blur(6px);
+}
+
+.shuup-pill-block:hover {
+  background: #dc2626;
+}
+
+/* =================================================== */
+/* BOTTOM CONTROLS ROW                                 */
+/* =================================================== */
+.shuup-bottom-bar {
+  height: 110px;
+  min-height: 110px;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  background-color: #ffffff;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* Left Controls Panel: Exactly 3 Large Buttons */
+.shuup-bottom-left {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 12px 18px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  align-items: center;
+  background-color: #ffffff;
+}
+
+/* Right Bottom Panel: Kept completely minimal & clean */
+.shuup-bottom-right {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  background-color: #ffffff;
+}
+
+/* Large OmeTV-Style Action Buttons */
+.shuup-action-btn {
+  height: 82px;
+  border: none;
+  border-radius: 14px;
+  font-family: inherit;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  user-select: none;
+  transition: transform 0.08s ease, filter 0.12s ease, background-color 0.12s ease;
+}
+
+.shuup-action-btn:active:not(:disabled) {
+  transform: translateY(2px);
+}
+
+/* 1. Next / Start Button (Green) */
+.shuup-btn-next {
+  background-color: #27ae60;
+  color: #ffffff;
+  box-shadow: 0 4px 0 #1e824c, 0 6px 14px rgba(39, 174, 96, 0.25);
+}
+
+.shuup-btn-next:hover:not(:disabled) {
+  background-color: #2ecc71;
+}
+
+.shuup-btn-next:disabled {
+  background-color: #94a3b8;
+  box-shadow: 0 4px 0 #64748b;
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+/* 2. Stop Button (Coral-Red) */
+.shuup-btn-stop {
+  background-color: #ff6b6b;
+  color: #ffffff;
+  box-shadow: 0 4px 0 #e05353;
+  opacity: 0.75;
+}
+
+.shuup-btn-stop.active {
+  background-color: #ef5350;
+  box-shadow: 0 4px 0 #c62828, 0 6px 14px rgba(239, 83, 80, 0.25);
+  opacity: 1;
+}
+
+.shuup-btn-stop.active:hover {
+  background-color: #e53935;
+}
+
+.shuup-btn-stop:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* 3. I Am Button (White / Light-Grey) */
+.shuup-btn-iam {
+  background-color: #ffffff;
+  color: #1e293b;
+  border: 1px solid #d1d5db;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  font-size: 17px;
+  position: relative;
+}
+
+.shuup-btn-iam:hover {
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.shuup-btn-iam.open {
+  background-color: #f1f5f9;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+/* Identity Popover Menu */
+.shuup-iam-popover {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  padding: 10px;
+  z-index: 100;
+  text-align: left;
+  animation: shuup-pop-in 0.12s ease-out;
+}
+
+@keyframes shuup-pop-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.shuup-iam-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 6px 6px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 6px;
+}
+
+.shuup-iam-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #1e293b;
+  transition: background-color 0.1s;
+}
+
+.shuup-iam-option:hover {
+  background-color: #f1f5f9;
+}
+
+.shuup-iam-option input {
+  accent-color: #27ae60;
+  cursor: pointer;
+}
+
+/* Subtle Status / Notice in Right Bottom */
+.shuup-notice-card {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.shuup-notice-alert {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* =================================================== */
+/* RESPONSIVE DESIGN FOR TABLET & MOBILE               */
+/* =================================================== */
+@media (max-width: 860px) {
+  .shuup-stage {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  .shuup-video-row {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .shuup-video-panel {
+    height: 48vh;
+    min-height: 280px;
+    border-right: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .shuup-bottom-bar {
+    flex-direction: column;
+    height: auto;
+    min-height: auto;
+    padding: 12px;
+  }
+
+  .shuup-bottom-left {
+    padding: 0;
+    width: 100%;
+  }
+
+  .shuup-bottom-right {
+    display: none;
+  }
+
+  .shuup-action-btn {
+    height: 64px;
+    font-size: 17px;
+  }
+}

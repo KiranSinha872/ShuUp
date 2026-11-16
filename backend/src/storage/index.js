@@ -1,27 +1,75 @@
 import crypto from "node:crypto";
 import { createSqliteDatabase } from "./sqlite.js";
+import { createPostgresDatabase } from "./postgres.js";
 import { createStorageQueue } from "./queue.js";
+import { SUPABASE_DB_URL, STORAGE_BACKEND, NODE_ENV } from "../config.js";
 
 /**
  * Creates a high-performance, non-blocking storage adapter.
+ * Supports Supabase PostgreSQL (production & connection pooling) and local SQLite (development/tests).
  */
 export function createStorageAdapter(options = {}) {
-  const dbPath = options.dbPath || ":memory:";
   const logger = options.logger || console;
   const maxCallLogQueueSize = options.maxCallLogQueueSize || 500;
   const flushIntervalMs = options.flushIntervalMs || 50;
 
-  const sqlite = createSqliteDatabase(dbPath, { logger });
-  const queue = createStorageQueue(sqlite, {
+  // Determine backend: explicit option > SUPABASE_DB_URL presence > STORAGE_BACKEND config
+  let backend = options.backend;
+  if (!backend) {
+    if (options.supabaseDbUrl || (STORAGE_BACKEND === "postgres") || (SUPABASE_DB_URL && NODE_ENV === "production")) {
+      backend = "postgres";
+    } else {
+      backend = STORAGE_BACKEND || "sqlite";
+    }
+  }
+
+  // Enforce no silent fallback to SQLite in production
+  if (NODE_ENV === "production" && backend === "sqlite") {
+    throw new Error(
+      "Configuration error: SQLite storage backend is not permitted in production environment. Configure SUPABASE_DB_URL."
+    );
+  }
+
+  let dbDriver = null;
+  const isPostgres = backend === "postgres";
+
+  if (isPostgres) {
+    const connectionString = options.supabaseDbUrl || SUPABASE_DB_URL;
+    if (!connectionString && !options.pool) {
+      throw new Error(
+        "Configuration error: SUPABASE_DB_URL (or DATABASE_URL) is required for postgres storage backend."
+      );
+    }
+    dbDriver = createPostgresDatabase(connectionString, {
+      logger,
+      pool: options.pool,
+      ssl: options.ssl
+    });
+  } else {
+    const dbPath = options.dbPath || ":memory:";
+    dbDriver = createSqliteDatabase(dbPath, { logger });
+  }
+
+  const queue = createStorageQueue(dbDriver, {
     maxCallLogQueueSize,
     flushIntervalMs,
     logger
   });
 
   return {
+    backend,
+    isPostgres,
+    db: dbDriver,
+
+    async initSchema() {
+      if (isPostgres && typeof dbDriver.initSchema === "function") {
+        await dbDriver.initSchema();
+      }
+    },
+
     /**
      * Non-blocking call logging. Completely anonymous (no session_id, no account_id, no IPs).
-     * Never awaits or throws.
+     * Never awaits or throws inside hot matching path.
      */
     logCall({ startedAt, endedAt, durationSeconds, connectionType }) {
       if (!startedAt || !endedAt) return;
@@ -57,8 +105,10 @@ export function createStorageAdapter(options = {}) {
      * Read reports for moderation/admin.
      */
     getReports({ limit = 50, offset = 0 } = {}) {
-      const rows = sqlite.stmts.getReportsList.all(limit, offset);
-      // Never expose reporterAccountId to public or non-privileged callers
+      if (isPostgres) {
+        return dbDriver.getReports({ limit, offset });
+      }
+      const rows = dbDriver.stmts.getReportsList.all(limit, offset);
       return rows.map((r) => ({
         reportId: r.report_id,
         createdAt: r.created_at,
@@ -71,7 +121,10 @@ export function createStorageAdapter(options = {}) {
     },
 
     getReportById(reportId) {
-      const r = sqlite.stmts.getReportById.get(reportId);
+      if (isPostgres) {
+        return dbDriver.getReportById(reportId);
+      }
+      const r = dbDriver.stmts.getReportById.get(reportId);
       if (!r) return null;
       return {
         reportId: r.report_id,
@@ -86,16 +139,22 @@ export function createStorageAdapter(options = {}) {
     },
 
     updateReportStatus(reportId, status) {
-      return sqlite.stmts.updateReportStatus.run(status, reportId);
+      if (isPostgres) {
+        return dbDriver.updateReportStatus(reportId, status);
+      }
+      return dbDriver.stmts.updateReportStatus.run(status, reportId);
     },
 
     /**
      * Accounts management (Phase 8a foundation for 7c/7d).
      */
     createAccount({ id, googleSubHash, role = "user", email = null, passwordHash = null }) {
+      if (isPostgres) {
+        return dbDriver.createAccount({ id, googleSubHash, role, email, passwordHash });
+      }
       const accountId = id || crypto.randomUUID();
       const createdAt = new Date().toISOString();
-      sqlite.stmts.insertAccount.run(
+      dbDriver.stmts.insertAccount.run(
         accountId,
         googleSubHash || null,
         role,
@@ -107,17 +166,26 @@ export function createStorageAdapter(options = {}) {
     },
 
     getAccountById(id) {
-      return sqlite.stmts.getAccountById.get(id) || null;
+      if (isPostgres) {
+        return dbDriver.getAccountById(id);
+      }
+      return dbDriver.stmts.getAccountById.get(id) || null;
     },
 
     getAccountByGoogleSubHash(googleSubHash) {
       if (!googleSubHash) return null;
-      return sqlite.stmts.getAccountByGoogleSub.get(googleSubHash) || null;
+      if (isPostgres) {
+        return dbDriver.getAccountByGoogleSubHash(googleSubHash);
+      }
+      return dbDriver.stmts.getAccountByGoogleSub.get(googleSubHash) || null;
     },
 
     getAccountByEmail(email) {
       if (!email) return null;
-      return sqlite.stmts.getAccountByEmail.get(email.toLowerCase()) || null;
+      if (isPostgres) {
+        return dbDriver.getAccountByEmail(email);
+      }
+      return dbDriver.stmts.getAccountByEmail.get(email.toLowerCase()) || null;
     },
 
     /**
@@ -128,36 +196,33 @@ export function createStorageAdapter(options = {}) {
      * - Preserves bans table entry intact.
      */
     deleteAccount(accountId) {
-      const account = sqlite.stmts.getAccountById.get(accountId);
+      if (isPostgres) {
+        return dbDriver.deleteAccount(accountId);
+      }
+      const account = dbDriver.stmts.getAccountById.get(accountId);
       if (!account) return false;
 
       const identityHash = account.google_sub_hash || accountId;
 
-      sqlite.db.exec("BEGIN TRANSACTION;");
+      dbDriver.db.exec("BEGIN TRANSACTION;");
       try {
-        // 1. Clear reporter account when this user was the reporter
-        sqlite.stmts.clearReporterInReports.run(accountId);
+        dbDriver.stmts.clearReporterInReports.run(accountId);
 
-        // 2. Determine whether account is banned or has an open (pending) report
-        const hasBan = Boolean(sqlite.stmts.getBanByIdentity.get(identityHash));
-        const hasOpenReport = Boolean(sqlite.stmts.hasOpenReportsForAccount.get(accountId));
+        const hasBan = Boolean(dbDriver.stmts.getBanByIdentity.get(identityHash));
+        const hasOpenReport = Boolean(dbDriver.stmts.hasOpenReportsForAccount.get(accountId));
 
         if (hasBan || hasOpenReport) {
-          // Preserve tombstone with identity hash so ban/incident correlation is not lost
           const tombstone = `tombstone:${identityHash}`;
-          sqlite.stmts.tombstoneReportedInReports.run(tombstone, accountId);
+          dbDriver.stmts.tombstoneReportedInReports.run(tombstone, accountId);
         } else {
-          // Clean user with no violations: completely null reported reference
-          sqlite.stmts.clearReportedInReports.run(accountId);
+          dbDriver.stmts.clearReportedInReports.run(accountId);
         }
 
-        // 3. Remove account row (bans table entry remains completely intact)
-        sqlite.stmts.deleteAccount.run(accountId);
-
-        sqlite.db.exec("COMMIT;");
+        dbDriver.stmts.deleteAccount.run(accountId);
+        dbDriver.db.exec("COMMIT;");
         return true;
       } catch (err) {
-        sqlite.db.exec("ROLLBACK;");
+        dbDriver.db.exec("ROLLBACK;");
         throw err;
       }
     },
@@ -167,21 +232,30 @@ export function createStorageAdapter(options = {}) {
      */
     banIdentity({ identityHash, reason = "safety_violation" }) {
       if (!identityHash) return false;
+      if (isPostgres) {
+        return dbDriver.banIdentity({ identityHash, reason });
+      }
       const id = crypto.randomUUID();
       const bannedAt = new Date().toISOString();
-      sqlite.stmts.insertBan.run(id, identityHash, reason, bannedAt);
+      dbDriver.stmts.insertBan.run(id, identityHash, reason, bannedAt);
       return true;
     },
 
     isIdentityBanned(identityHash) {
       if (!identityHash) return false;
-      const ban = sqlite.stmts.getBanByIdentity.get(identityHash);
+      if (isPostgres) {
+        return dbDriver.isIdentityBanned(identityHash);
+      }
+      const ban = dbDriver.stmts.getBanByIdentity.get(identityHash);
       return Boolean(ban);
     },
 
     unbanIdentity(identityHash) {
       if (!identityHash) return false;
-      sqlite.stmts.deleteBanByIdentity.run(identityHash);
+      if (isPostgres) {
+        return dbDriver.unbanIdentity(identityHash);
+      }
+      dbDriver.stmts.deleteBanByIdentity.run(identityHash);
       return true;
     },
 
@@ -189,12 +263,14 @@ export function createStorageAdapter(options = {}) {
      * Aggregated metrics for Admin Dashboard (Phase 8b readiness).
      */
     getDashboardStats() {
-      const totals = sqlite.stmts.getAggregatedTotals.get();
+      if (isPostgres) {
+        return dbDriver.getDashboardStats();
+      }
+      const totals = dbDriver.stmts.getAggregatedTotals.get();
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-      // Merge daily summaries with live call logs for last 7 days
-      const pastDaily = sqlite.stmts.getDailySummariesSinceDate.all(sevenDaysAgo) || [];
-      const recentCalls = sqlite.stmts.getCallsSinceDate.all(sevenDaysAgo) || [];
+      const pastDaily = dbDriver.stmts.getDailySummariesSinceDate.all(sevenDaysAgo) || [];
+      const recentCalls = dbDriver.stmts.getCallsSinceDate.all(sevenDaysAgo) || [];
 
       const dailyMap = new Map();
       for (const row of pastDaily) {
@@ -223,18 +299,20 @@ export function createStorageAdapter(options = {}) {
      * then deletes raw logs in exact atomic batches with event loop yields.
      */
     async pruneOldData({ callLogDays = 90, reportDays = 90, batchSize = 500 } = {}) {
+      if (isPostgres) {
+        return await dbDriver.pruneOldData({ callLogDays, reportDays, batchSize });
+      }
+
       const cutoffCalls = new Date(Date.now() - callLogDays * 24 * 60 * 60 * 1000).toISOString();
       const cutoffReports = new Date(Date.now() - reportDays * 24 * 60 * 60 * 1000).toISOString();
 
       let prunedCalls = 0;
       let prunedReports = 0;
 
-      // 1. Chunked atomic prune of call_logs
       while (true) {
-        const batch = sqlite.stmts.getOldestCallLogs.all(cutoffCalls, batchSize);
+        const batch = dbDriver.stmts.getOldestCallLogs.all(cutoffCalls, batchSize);
         if (!batch || batch.length === 0) break;
 
-        // Group the batch rows by day for atomic upsert
         const dayAgg = new Map();
         for (const log of batch) {
           const day = log.started_at.slice(0, 10);
@@ -247,28 +325,26 @@ export function createStorageAdapter(options = {}) {
           dayAgg.set(day, agg);
         }
 
-        sqlite.db.exec("BEGIN TRANSACTION;");
+        dbDriver.db.exec("BEGIN TRANSACTION;");
         try {
           for (const [day, agg] of dayAgg.entries()) {
-            sqlite.stmts.upsertDailySummary.run(day, agg.total, agg.seconds, agg.direct, agg.relay, agg.unknown);
+            dbDriver.stmts.upsertDailySummary.run(day, agg.total, agg.seconds, agg.direct, agg.relay, agg.unknown);
           }
           const ids = batch.map((b) => b.id);
-          sqlite.stmts.deleteCallLogsByIds(ids).run(...ids);
-          sqlite.db.exec("COMMIT;");
+          dbDriver.stmts.deleteCallLogsByIds(ids).run(...ids);
+          dbDriver.db.exec("COMMIT;");
           prunedCalls += batch.length;
         } catch (err) {
-          sqlite.db.exec("ROLLBACK;");
+          dbDriver.db.exec("ROLLBACK;");
           logger.warn("[Storage] Prune chunk transaction failed:", err.message);
           break;
         }
 
-        // Yield to the event loop between batches so signaling/matching never starves
         await new Promise((resolve) => setImmediate(resolve));
       }
 
-      // 2. Chunked prune of non-urgent reports (urgent reports are exempt and remain indefinitely)
       try {
-        const info = sqlite.stmts.deleteOldNonUrgentReports.run(cutoffReports, cutoffReports, batchSize);
+        const info = dbDriver.stmts.deleteOldNonUrgentReports.run(cutoffReports, cutoffReports, batchSize);
         prunedReports += info?.changes || 0;
       } catch (err) {
         logger.warn("[Storage] Report prune failed:", err.message);
@@ -281,13 +357,17 @@ export function createStorageAdapter(options = {}) {
       return queue.getStats();
     },
 
-    flushQueue() {
-      return queue.flush();
+    async flushQueue() {
+      return await queue.flush();
     },
 
     async close({ timeoutMs = 2000 } = {}) {
       await queue.drain({ timeoutMs });
-      sqlite.close();
+      if (isPostgres) {
+        await dbDriver.close();
+      } else {
+        dbDriver.close();
+      }
     }
   };
 }

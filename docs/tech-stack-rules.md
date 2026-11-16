@@ -14,7 +14,7 @@ This document establishes the technical constraints, coding standards, and secur
 | Media Transport | Browser-native WebRTC | Direct P2P video/audio; zero third-party video SDK dependencies. |
 | Health Check | Plain Node `http.createServer` | Simple GET `/health` returning `{ status: "ok" }`. |
 | Test Runner | Node.js built-in `node --test` | Zero external testing dependencies. Executed via `npm test` (`"test": "node --test"` in `backend/package.json`). |
-| Persistence (Phase 8) | Supabase | Auth with MFA, anonymous session analytics, and invite code management. |
+| Persistence (Phase 8) | SQLite / Hosted Postgres | Auth with MFA, anonymous session analytics, accounts, bans, and moderation reports. |
 
 ---
 
@@ -44,20 +44,18 @@ This document establishes the technical constraints, coding standards, and secur
   - Ephemeral credentials are passed to clients strictly inside the `matched` event payload.
   - Connection telemetry (`connection-stats`) reports strictly the enum `"direct" | "relay" | "unknown"`. Zero IP addresses, ports, or raw candidate strings may be accepted, logged, or recorded.
 
-### Phase 7 (Trust, Safety & Invite Gate)
-- **Invite Code & Handshake Verification:**
-  - Handshake authentication must validate `inviteCode` using constant-time comparison (`crypto.timingSafeEqual`) across all configured codes before allowing socket connection.
-  - Startup validation (`validateStartupConfig`) fails safely without printing secret values if `SERVER_SALT` (< 32 chars) or `INVITE_CODES` (< 16 chars per code) are invalid when `REQUIRE_INVITE` is active.
-  - Dual-tier lockout defense: per-token lockout (5 failed attempts / 15 min) plus a second, looser per-address counter (`INVITE_ADDRESS_LOCKOUT_ATTEMPTS`, default 50 failed attempts / 15 min) that rejects further handshakes with `INVITE_LOCKED_OUT`. Only failed attempts increment the counter; valid codes never trip it. Shared networks (campus Wi-Fi, tunnels, NATs) can raise this limit.
-  - In-memory data structures enforce hard bounds (`MAX_TRACKED_LOCKOUTS`, default 10,000) with oldest-eviction (LRU) to prevent unbounded memory growth under automated rotation attacks.
-  - `sweepExpired()` purges all failed-attempt records older than 15 minutes, including partial attempts that never reached the lockout threshold.
+### Phase 7 (Trust & Safety)
+- **Handshake Authentication & Connection Caps:**
+  - Handshake authentication validates `clientToken` presence and length ($\ge 8$ chars) before allowing socket connection.
+  - Startup validation (`validateStartupConfig`) fails safely without printing secret values if `SERVER_SALT` (< 32 chars) is missing or invalid.
+  - Sockets-per-address and total server connections are capped in memory (`MAX_SOCKETS_PER_ADDRESS`, `MAX_CONNECTIONS`). When server capacity is reached, new handshakes are refused with `SERVER_FULL`. Network addresses are used strictly in memory for counting and are never stored or logged.
+  - In-memory data structures enforce hard bounds with oldest-eviction (LRU) to prevent unbounded memory growth.
 - **Anonymous Token Hashing & Zero Secret Logging:**
   - Client tokens are hashed server-side using `HMAC-SHA256` keyed with `SERVER_SALT`.
-  - Raw invite codes, raw client tokens, token hashes, IP addresses, and user notes must **never** be output to standard console logs or persisted in version control.
+  - Raw client tokens, token hashes, IP addresses, and user notes must **never** be output to standard console logs or persisted in version control.
 - **Multi-Tier Rate Limiting & Connection Caps:**
   - Per-event token bucket rate limits: generous burst for `ice-candidate` (capacity 30, refill 10/s); strict limits for `join-queue`, `offer`, `answer`, `leave-session`, `report-user`, and `block-user`.
   - Global socket flood limiter drops excessive traffic and signals disconnect upon sustained abuse.
-  - Sockets-per-address and total server connections are capped in memory (`MAX_SOCKETS_PER_ADDRESS`, `MAX_TOTAL_CONNECTIONS`). Network addresses are used strictly in memory for counting and are never stored or logged.
 - **Reports & Moderation Records:**
   - Reports are appended to `backend/data/reports.jsonl` with file permissions `0600`. The `backend/data/` directory must remain strictly git-ignored.
   - File size is capped (`MAX_REPORTS_FILE_SIZE_BYTES`); appends outside the matching path.
@@ -79,7 +77,6 @@ This document establishes the technical constraints, coding standards, and secur
 ### Database Indexing (Phase 8 Supabase)
 - **Needed:**
   - `sessions(created_at DESC)`: Required to compute the 7-day rolling call volume and duration efficiently without full table scans.
-  - `invite_codes(code)`: Unique index required for $O(1)$ invite code lookup.
   - `reports(created_at DESC)`: Needed for moderation review ordering.
 - **Not Needed:**
   - No database indexes on the matchmaking queue. The queue is 100% in-memory; no database table is touched during matching.

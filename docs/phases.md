@@ -72,28 +72,29 @@ Development proceeds sequentially through 9 distinct phases. Each milestone must
 
 ---
 
-### Phase 7: Trust, Safety & Invite Gate
+### Phase 7: Trust & Safety
+- **Access Model:** Open access chosen deliberately (no invite codes); adult verification still unresolved before public launch.
 - **Phase 7a (Complete - Committed):**
-  - **Handshake Invite Gate:** Server-side validation via `crypto.timingSafeEqual` against `INVITE_CODES` with dual lockout (per-token+address and per-address rotation limiter) with memory bounding.
-  - **Token Hashing & Zero Secret Logging:** Client token stored in `localStorage`, hashed via `HMAC-SHA256` with `SERVER_SALT`. Zero logging of raw tokens, codes, notes, or network addresses.
-  - **Startup Safeguards:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) and `INVITE_CODES` ($\ge 16$) on startup, exiting cleanly without logging secrets.
+  - **Handshake Security & Connection Caps:** Server-side client token validation and hashing, ban check, per-address connection limits, and overall server capacity cap (`MAX_CONNECTIONS` with `SERVER_FULL` refusal).
+  - **Token Hashing & Zero Secret Logging:** Client token stored in `localStorage`, hashed via `HMAC-SHA256` with `SERVER_SALT`. Zero logging of raw tokens, notes, or network addresses.
+  - **Startup Safeguards:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$) on startup, exiting cleanly without logging secrets.
   - **Multi-Tier Rate Limiting:** Token-bucket rate limits per event type (30-candidate ICE burst; strict queue/safety limits) and global flood limiter.
   - **Grace Period & Abuse Controls:** 120s post-call grace window preserved per session for reporting/blocking; in-memory bidirectional block check inside `isCompatible`; automated 1h cooldown after $\ge 3$ distinct verified partner reports.
   - **Reports Storage:** Appends sanitized incident records to `backend/data/reports.jsonl` (file mode `0600`, git-ignored, 10MB cap); urgent categories trigger high-visibility terminal alert.
 - **Phase 7b (Implemented - Awaiting Verification):**
-  - **Sequential Entry Flow:** Invite code gate screen -> 18+ and P2P consent gate screen -> media stream activation. Both gates held in-memory per page load.
+  - **Sequential Entry Flow:** 18+ and P2P consent gate screen -> media stream activation. Consent held in-memory per page load.
   - **Consent Screen:** 3 mandatory checkboxes (18+, direct P2P IP visibility, community rules & safety tools) with honest warnings regarding unscreened video and browser verification limits.
   - **Safety UI:** `Report` and `Block` buttons in video header; `ReportModal` with fixed target session ID and live note counter; `BlockConfirmModal` with immediate call termination.
   - **120-Second Post-Call Grace Banner:** Labeled "Previous partner", survives rematching into new calls, live countdown, clears on report or expiration.
-  - **Moderation Runbook:** Complete operational documentation in `docs/moderation-procedure.md` covering token bans, invite code rotation, emergency procedures, and backup workflows.
+  - **Moderation Runbook:** Complete operational documentation in `docs/moderation-procedure.md` covering token bans, emergency procedures, and backup workflows.
 - **Acceptance Check:**
-  - Works with real browsers: Handshake rejects unauthorized connections; consent gate precedes media access; Report and Block dialogs function in-call and during post-call grace; zero network address leaks in logs.
+  - Works with real browsers: Handshake validates tokens; consent gate precedes media access; Report and Block dialogs function in-call and during post-call grace; zero network address leaks in logs.
 
 ---
 
 ### Phase 8: Persistence & Admin Dashboard
 - **Scope:**
-  - Integrate Supabase database: store invite codes, moderation reports, and anonymous session telemetry (`sessionId`, `durationSeconds`, `connectionType`).
+  - Integrate database: store moderation reports, accounts, bans, and anonymous call telemetry (`started_at`, `ended_at`, `duration_seconds`, `connection_type`).
   - Create protected `/admin` frontend page.
   - Implement admin authentication via Supabase Auth with Multi-Factor Authentication (MFA).
   - Backend verifies admin JWT and MFA status to serve live platform statistics:

@@ -19,23 +19,15 @@ export const METERED_DOMAIN = (process.env.METERED_DOMAIN || "").trim();
 export const METERED_API_KEY = (process.env.METERED_API_KEY || "").trim();
 
 // Phase 7 Trust & Safety Config
-export const REQUIRE_INVITE = process.env.REQUIRE_INVITE !== "false";
-export const INVITE_CODES = (process.env.INVITE_CODES || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
 export const SERVER_SALT = (process.env.SERVER_SALT || "").trim();
 export const TRUST_PROXY = process.env.TRUST_PROXY === "true" || process.env.TRUST_PROXY === "1";
 export const MAX_SOCKETS_PER_ADDRESS = parseNumber(process.env.MAX_SOCKETS_PER_ADDRESS, 10);
-export const MAX_TOTAL_CONNECTIONS = parseNumber(process.env.MAX_TOTAL_CONNECTIONS, 500);
+export const MAX_CONNECTIONS = parseNumber(process.env.MAX_CONNECTIONS, 500);
 export const BANNED_TOKENS = (process.env.BANNED_TOKENS || "")
   .split(",")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-export const INVITE_LOCKOUT_ATTEMPTS = parseNumber(process.env.INVITE_LOCKOUT_ATTEMPTS, 5);
-export const INVITE_LOCKOUT_MS = parseNumber(process.env.INVITE_LOCKOUT_MS, 15 * 60 * 1000);
-export const INVITE_ADDRESS_LOCKOUT_ATTEMPTS = parseNumber(process.env.INVITE_ADDRESS_LOCKOUT_ATTEMPTS, 50);
 export const MAX_TRACKED_LOCKOUTS = parseNumber(process.env.MAX_TRACKED_LOCKOUTS, 10_000);
 export const GRACE_PERIOD_MS = parseNumber(process.env.GRACE_PERIOD_MS, 120_000);
 export const BLOCK_TTL_MS = parseNumber(process.env.BLOCK_TTL_MS, 24 * 60 * 60 * 1000);
@@ -46,27 +38,31 @@ export const COOLDOWN_DURATION_MS = parseNumber(process.env.COOLDOWN_DURATION_MS
 export const REPORTS_FILE_PATH = process.env.REPORTS_FILE_PATH || "backend/data/reports.jsonl";
 export const MAX_REPORTS_FILE_SIZE_BYTES = parseNumber(process.env.MAX_REPORTS_FILE_SIZE_BYTES, 10 * 1024 * 1024);
 export const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || "backend/data/shuup.db";
+export const SUPABASE_DB_URL = (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "").trim();
+export const STORAGE_BACKEND = (process.env.STORAGE_BACKEND || (SUPABASE_DB_URL ? "postgres" : "sqlite")).toLowerCase();
+export const NODE_ENV = (process.env.NODE_ENV || "development").toLowerCase();
 
 export function validateStartupConfig(cfg = {}) {
-  const requireInvite = cfg.REQUIRE_INVITE ?? REQUIRE_INVITE;
   const serverSalt = cfg.SERVER_SALT ?? SERVER_SALT;
-  const inviteCodes = cfg.INVITE_CODES ?? INVITE_CODES;
+  if (!serverSalt || typeof serverSalt !== "string" || serverSalt.length < 32) {
+    throw new Error(
+      "Startup failed: SERVER_SALT is missing or shorter than 32 characters."
+    );
+  }
 
-  if (requireInvite) {
-    if (!serverSalt || typeof serverSalt !== "string" || serverSalt.length < 32) {
+  const nodeEnv = cfg.NODE_ENV ?? NODE_ENV;
+  const storageBackend = cfg.STORAGE_BACKEND ?? STORAGE_BACKEND;
+  const supabaseDbUrl = cfg.SUPABASE_DB_URL ?? SUPABASE_DB_URL;
+
+  if (nodeEnv === "production") {
+    if (storageBackend === "sqlite") {
       throw new Error(
-        "Startup failed: SERVER_SALT is missing or shorter than 32 characters while REQUIRE_INVITE is enabled."
+        "Startup failed: SQLite storage backend is not permitted in production."
       );
     }
-    if (!inviteCodes || !Array.isArray(inviteCodes) || inviteCodes.length === 0) {
+    if (!supabaseDbUrl) {
       throw new Error(
-        "Startup failed: INVITE_CODES is missing or empty while REQUIRE_INVITE is enabled."
-      );
-    }
-    const hasShortCode = inviteCodes.some((code) => typeof code !== "string" || code.trim().length < 16);
-    if (hasShortCode) {
-      throw new Error(
-        "Startup failed: One or more entries in INVITE_CODES is shorter than 16 characters."
+        "Startup failed: SUPABASE_DB_URL is missing in production environment. SQLite fallback is not permitted in production."
       );
     }
   }

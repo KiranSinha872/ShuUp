@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { validateConsent } from "../safety-helpers.js";
+import ShuupLogo from "./ShuupLogo.jsx";
 
 export default function ConsentGate({ onConsentGranted }) {
   const [ageConfirmed, setAgeConfirmed] = useState(false);
@@ -23,15 +24,20 @@ export default function ConsentGate({ onConsentGranted }) {
     <div
       style={{
         maxWidth: "540px",
-        margin: "3rem auto",
+        margin: "2rem auto",
         padding: "2rem",
         backgroundColor: "#ffffff",
-        borderRadius: "12px",
-        boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-        border: "1px solid #e2e8f0"
+        borderRadius: "16px",
+        boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+        border: "1px solid #e2e8f0",
+        textAlign: "center"
       }}
     >
-      <h2 style={{ fontSize: "1.4rem", fontWeight: "700", marginBottom: "0.5rem", color: "#0f172a", textAlign: "center" }}>
+      <div style={{ marginBottom: "1.25rem" }}>
+        <ShuupLogo size={130} showText={true} />
+      </div>
+
+      <h2 style={{ fontSize: "1.35rem", fontWeight: "700", marginBottom: "0.5rem", color: "#0f172a" }}>
         Tester Agreement & Safety Notice
       </h2>
 
@@ -47,7 +53,7 @@ export default function ConsentGate({ onConsentGranted }) {
           lineHeight: "1.4"
         }}
       >
-        <strong>Notice:</strong> This is a screen in the browser and the server cannot verify your age. Access is strictly restricted to invited adult testers.
+        <strong>Notice:</strong> This is a screen in the browser and the server cannot verify your age. Access is strictly restricted to adult testers (18+).
       </div>
 
       <p style={{ fontSize: "0.875rem", color: "#475569", marginBottom: "1rem", lineHeight: "1.5" }}>
@@ -68,7 +74,7 @@ export default function ConsentGate({ onConsentGranted }) {
               style={{ marginTop: "0.2rem" }}
             />
             <span>
-              I confirm that I am at least 18 years old and understand this is an experimental prototype restricted to invited adult testers.
+              I confirm that I am at least 18 years old and understand this is an experimental prototype restricted to adult testers (18+).
             </span>
           </label>
 

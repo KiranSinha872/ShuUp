@@ -19,6 +19,8 @@ build/
 # Local data & reports
 backend/data/
 data/
+backend/backups/
+backups/
 *.db
 *.db-wal
 *.db-shm

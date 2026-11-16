@@ -66,7 +66,7 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 
 | Event Name | Direction | Payload Schema | Purpose | Status in Code |
 |---|---|---|---|---|
-| `handshake (auth)` | Client -> Server | `{ auth: { inviteCode: string, clientToken: string } }` | Authenticates connection against server invite codes and hashes client token | Implemented (Phase 7a) |
+| `handshake (auth)` | Client -> Server | `{ auth: { clientToken: string } }` | Authenticates connection against token bans, hashes client token, and enforces connection caps | Implemented (Phase 7a) |
 | `join-queue` | Client -> Server | `{ identity: string, preferences: string[] }` | Enters client into matchmaking queue | Implemented (Phase 4) |
 | `queue-status` | Server -> Client | `{ status: "waiting" \| "rejected", message: string }` | Queue status update or payload rejection reason | Implemented (Phase 4) |
 | `broaden-prompt` | Server -> Client | `{ waitSeconds: number }` | Prompt user to broaden preferences after 30s | Implemented (Phase 5) |
@@ -108,17 +108,17 @@ All events travel over Socket.IO. The server guarantees that signaling messages 
 
 ## 5. Trust, Safety & Abuse Control Architecture (Phase 7a)
 
-### 5.1 Invite-Code Gate & Handshake Security
-- Gated behind `INVITE_CODES` in `backend/.env`.
-- Validation is evaluated at the Socket.IO connection handshake level before enrolling sockets.
-- **Timing-Safe Comparison:** `validateInviteCode` uses `crypto.timingSafeEqual` over fixed-length SHA-256 digests across all valid codes without early return.
-- **Dual-Tier Lockout Defense:**
-  - *Per-Token Lockout:* 5 failed attempts within 15 minutes locks out `${address}:${clientToken}` with `INVITE_LOCKED_OUT`.
-  - *Per-Address Lockout:* A second, looser counter (`INVITE_ADDRESS_LOCKOUT_ATTEMPTS`, default 50 failed attempts within 15 minutes) rejects all further handshakes from that IP with `INVITE_LOCKED_OUT` to prevent token-rotation bypass attacks. Only failed attempts increment the counter; valid codes never trip it. Shared networks (campus Wi-Fi, tunnels, NATs) can raise this limit via `INVITE_ADDRESS_LOCKOUT_ATTEMPTS`.
+### 5.1 Handshake Security & Connection Caps
+- Evaluated at the Socket.IO connection handshake level before enrolling sockets.
+- **Client Token Validation:** Requires client token of valid length ($\ge 8$ chars). Hashed server-side via `HMAC-SHA256` keyed with `SERVER_SALT`.
+- **Ban Enforcement:** Banned tokens are immediately refused at handshake with `BANNED`.
+- **Connection Limits:**
+  - *Per-Address Concurrency:* Capped by `MAX_SOCKETS_PER_ADDRESS` (default 10 sockets per IP) to prevent local exhaustion.
+  - *Server Total Capacity:* Capped by `MAX_CONNECTIONS` (default 500). When capacity is reached, new handshakes are refused with `SERVER_FULL`.
 - **Memory Growth & Hard Bounds:**
-  - In-memory maps (`lockouts`, `addressLockouts`, `userBlocks`, `sessionReports`, `verifiedPairings`, `userReportTallies`, `cooldowns`) enforce hard bounds (`MAX_TRACKED_LOCKOUTS`, default 10,000) using oldest-entry LRU eviction (`setWithCap`).
-  - `sweepExpired()` actively purges all failed-attempt records older than 15 minutes, including partial attempts that never reached the lockout threshold.
-- **Startup Protection:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$ chars) and `INVITE_CODES` ($\ge 16$ chars per code) on process startup, exiting safely without printing secrets.
+  - In-memory maps (`userBlocks`, `sessionReports`, `verifiedPairings`, `userReportTallies`, `cooldowns`) enforce hard bounds using oldest-entry LRU eviction (`setWithCap`).
+  - `sweepExpired()` actively purges expired grace records, blocks, and cooldowns.
+- **Startup Protection:** `validateStartupConfig()` checks `SERVER_SALT` ($\ge 32$ chars) on process startup, exiting safely without printing secrets.
 
 ### 5.2 Anonymous Client Token
 - Generated in the browser (`crypto.randomUUID()`) and stored in `localStorage` under `shuup_client_token`.

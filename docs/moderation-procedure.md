@@ -1,6 +1,6 @@
 # Shuup - Moderation Procedure & Runbook
 
-> **Disclaimer:** The creator and operator of this application is not a lawyer. This software is an experimental prototype restricted exclusively to known, invited adult testers. You must seek proper legal counsel before inviting anyone beyond your own trusted devices or releasing this service to the public.
+> **Disclaimer:** The creator and operator of this application is not a lawyer. This software is an experimental prototype restricted exclusively to adult testers. You must seek proper legal counsel before sharing access beyond your own trusted devices or releasing this service to the public.
 
 ---
 
@@ -8,10 +8,10 @@
 
 ### 1.1 Legal Reporting Duties
 - **Mandatory Reporting:** You must research whether the laws in your country or jurisdiction impose legal duties on operators of communications services to report child sexual abuse material (CSAM), child sexual exploitation and abuse (CSAE), or imminent threats of violence to law enforcement or child protection agencies.
-- **Seek Professional Advice:** Do not deploy or invite external users without consulting a qualified legal professional regarding your jurisdiction's reporting obligations, intermediary liability, and privacy laws.
+- **Seek Professional Advice:** Do not deploy or onboard external users without consulting a qualified legal professional regarding your jurisdiction's reporting obligations, intermediary liability, and privacy laws.
 
 ### 1.2 Official Contacts to Fill In (Operator Research Required)
-Fill in the official contact details for your jurisdiction before inviting testers:
+Fill in the official contact details for your jurisdiction before onboarding testers:
 - **Child Protection Authority:** `[INSERT NATIONAL CHILD PROTECTION AUTHORITY AND HOW TO CONTACT IT]`
 - **Local Emergency Services (Police / Ambulance):** `[INSERT LOCAL EMERGENCY NUMBER]`
 - **Hotline for Illegal Online Content:** `[INSERT REGIONAL HOTLINE FOR ILLEGAL CONTENT]`
@@ -70,7 +70,7 @@ Each line is a self-contained JSON record:
 
 ## 4. Response Procedures by Category
 
-The server does **not** record which invite code a specific user submitted during handshake (to maintain zero link between tokens and codes). Follow these procedures:
+Follow these procedures:
 
 ### 4.1 Category: `urgent_minor_safety`
 1. **Immediate Session Termination:** Stop the backend server immediately (`Ctrl + C` or `kill`). Restarting the server is the only way to immediately terminate all active peer calls and clear server memory.
@@ -81,24 +81,21 @@ The server does **not** record which invite code a specific user submitted durin
      ```text
      BANNED_TOKENS=<reportedHashedToken>,<otherHashes>
      ```
-4. **Rotate ALL Invite Codes:** Because the server cannot identify which invite code was used by the offender, immediately rotate **all** invite codes in `backend/.env` under `INVITE_CODES`. Distribute the new codes only to verified, trusted adult testers.
-5. **Report to Authorities:** Submit a report to your national child protection authority:
+4. **Report to Authorities:** Submit a report to your national child protection authority:
    - Provide the session timestamp, category, and report ID.
    - **Crucial Rule:** Never attempt to view, verify, request, or store illegal images or video frames under any circumstances.
-6. **Restart Backend Server:** Start the server with the updated `backend/.env`.
+5. **Restart Backend Server:** Start the server with the updated `backend/.env`.
 
 ### 4.2 Category: `urgent_violence_threat`
 1. **Terminate & Restart Server:** Restart the server to terminate all ongoing sessions and clear sockets.
 2. **Preserve Report Record:** Securely back up `backend/data/reports.jsonl`.
 3. **Ban Reported User Token:** Add `reportedHashedToken` to `BANNED_TOKENS` in `backend/.env`.
-4. **Rotate Invite Codes:** Rotate all `INVITE_CODES` if the source is unknown or compromised.
-5. **Contact Emergency Services:** If the threat is credible, specific, or imminent, contact local emergency services immediately using the official contact details for your jurisdiction.
+4. **Contact Emergency Services:** If the threat is credible, specific, or imminent, contact local emergency services immediately using the official contact details for your jurisdiction.
 
 ### 4.3 Categories: `nudity_sexual_content`, `harassment_hate`, `spam_bot`
 1. **Review History:** Check `backend/data/reports.jsonl` to see if `reportedHashedToken` has previous reports from distinct sessions.
 2. **Automated Cooldown:** If 3 distinct verified partners have reported this token, the server automatically suspends the token from matchmaking for 1 hour.
 3. **Permanent Ban:** If behavior is repeated or abusive, permanently ban the token by adding `reportedHashedToken` to `BANNED_TOKENS` in `backend/.env` and restarting the backend.
-4. **Invite Code Rotation:** If widespread spam or abuse occurs, rotate all `INVITE_CODES`.
 
 ---
 
